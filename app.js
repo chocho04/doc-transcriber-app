@@ -7,6 +7,7 @@ let state = {
   unattachedStaffDocs: JSON.parse(localStorage.getItem('saved_unattached_staff_docs')) || [],
   
   activePage: 'invoices', // 'invoices', 'documents', or 'staff'
+  activeExpenseMonth: new Date().toISOString().slice(0, 7), // "YYYY-MM"
   
   // Page 1 (Invoices) state
   activeSource: 'camera', // 'camera' or 'upload'
@@ -19,7 +20,7 @@ let state = {
 
   // Page 2 (Documents) state
   activeSourceDocs: 'camera',
-  activeTabDocs: 'permit', // 'permit', 'contract', or 'other'
+  activeTabDocs: 'permit', // 'permit', 'contract', 'trade', or 'other'
   capturedImageBase64Docs: null,
   capturedFileNameDocs: null,
   capturedFileExtensionDocs: '',
@@ -112,11 +113,17 @@ const elements = {
   tabsNav: document.querySelector('.tabs-nav'),
   tabLinks: document.querySelectorAll('#view-invoices .tab-link'),
   badgeCountInvoices: document.getElementById('badge-count-invoices'),
+  badgeCountBills: document.getElementById('badge-count-bills'),
   badgeCountRevenueInvoices: document.getElementById('badge-count-revenue-invoices'),
   badgeCountReceipts: document.getElementById('badge-count-receipts'),
   badgeCountTaxes: document.getElementById('badge-count-taxes'),
   badgeCountOther: document.getElementById('badge-count-other'),
   invoiceSummary: document.getElementById('invoice-summary'),
+  monthlyExpenseSummary: document.getElementById('monthly-expense-summary'),
+  monthlyExpenseLabel: document.getElementById('monthly-expense-label'),
+  monthlyExpenseValue: document.getElementById('monthly-expense-value'),
+  btnPrevMonth: document.getElementById('btn-prev-month'),
+  btnNextMonth: document.getElementById('btn-next-month'),
   invoiceTotalValue: document.getElementById('invoice-total-value'),
   
   // View 2 (General Documents) Toggles & Panels
@@ -145,6 +152,7 @@ const elements = {
   docTabLinks: document.querySelectorAll('#view-documents .tab-link'),
   badgeCountPermits: document.getElementById('badge-count-permits'),
   badgeCountContracts: document.getElementById('badge-count-contracts'),
+  badgeCountTrade: document.getElementById('badge-count-trade'),
   badgeCountGeneralOther: document.getElementById('badge-count-general-other'),
   
   // View 3 (Personnel) Toggles & Panels
@@ -208,6 +216,10 @@ const elements = {
   viewDocExpiryDate: document.getElementById('view-doc-expiry-date'),
   viewDocCategory: document.getElementById('view-doc-category'),
   viewDocText: document.getElementById('view-doc-text'),
+  containerViewDocText: document.getElementById('container-view-doc-text'),
+  containerViewDocProducts: document.getElementById('container-view-doc-products'),
+  modalDocProductsBody: document.getElementById('modal-doc-products-body'),
+  btnAddDocProduct: document.getElementById('btn-add-doc-product'),
   btnDeleteDocGeneral: document.getElementById('btn-delete-doc-general'),
   modalDocPreviewImg: document.getElementById('modal-doc-preview-img'),
   modalDocPreviewPlaceholder: document.getElementById('modal-doc-preview-placeholder'),
@@ -658,12 +670,13 @@ Return a JSON object with the exact fields below:
    - "price": (number or null) the unit price or total price for this item. If not specified, return null.
    Example: [{"name": "Кафе еспресо", "quantity": 1, "price": 2.50}, {"name": "Минерална вода", "quantity": 2, "price": 1.20}]. Return an empty array [] if none are found.
 4. "totalAmount": The total sum amount with VAT in Euros (€). Look specifically for the price in Euros (€) that appears after phrases like "общо с ддс", "обща сума", "сума за плащане", "сума" (or their English translations like "total with vat", "total sum", "amount to pay", "sum"). Extract the number as a numeric float value. Return null if not found.
-5. "inferredType": Classify the document as "invoice", "receipt", "taxes", or "other".
+5. "inferredType": Classify the document as "invoice", "bills", "receipt", "taxes", or "other".
 
 Rules:
-- If the document contains the Bulgarian word "фактура" (or case variations like "ФАКТУРА"), "inferredType" MUST be "invoice".
+- If the document is a bill, utility bill, or service invoice (contains references to electricity, water, internet, heating, phone, services, utilities, or Bulgarian equivalents like "ток", "вода", "интернет", "парно", "телефон", "услуга", "услуги", "битова сметка", "сметка", "сметки", "такса", "такси", "А1", "Виваком", "Йеттел", "Yettel", "Електрохолд", "EVN", "Енерго-Про", "Софийска вода"), "inferredType" MUST be "bills".
+- If the document contains the Bulgarian word "фактура" (or case variations like "ФАКТУРА") and is not a utility bill/service invoice, "inferredType" MUST be "invoice".
 - If the document is a cash/sales receipt (contains "бон", "касова бележка", "receipt"), "inferredType" MUST be "receipt".
-- If the document is related to taxes, social security, state insurance, municipal fees, declarations, or state payments (contains "данък", "осигуровки", "данъци", "ддс декларация", "нп", "такса", "tax", "social security", "insurance"), "inferredType" MUST be "taxes".`;
+- If the document is related to taxes, social security, state insurance, municipal fees, declarations, or state payments (contains "данък", "осигуровки", "данъци", "ддс декларация", "нп", "tax", "social security", "insurance"), "inferredType" MUST be "taxes".`;
 
     const requestBody = await prepareGeminiRequestBody(state.capturedImageBase64, promptText, state.capturedFileExtension);
     
@@ -762,15 +775,18 @@ async function transcribeGeneralDocument() {
     const promptText = `You are an expert document analyzer. Analyze the attached document image or file.
 Extract the document information and return a JSON object with the exact fields below:
 1. "name": A concise, descriptive name for the document in Bulgarian (e.g., "Разрешително за строеж", "Договор за наем", "Анекс към договор", "Сертификат за съответствие", etc.). If no name can be inferred, return "Документ".
-2. "type": Classify the document type. It MUST be one of: "permit" (for permits, licenses, certificates, authorizations), "contract" (for agreements, annexes, lease/sale contracts, work contracts), or "other" (for any other type of document).
+2. "type": Classify the document type. It MUST be one of: "permit" (for permits, licenses, certificates, authorizations), "contract" (for agreements, annexes, lease/sale contracts, work contracts), "trade" (for commercial offers, delivery notes/protocols, commercial/trade documents, purchase orders, trade agreements, supplier invoices/documents), or "other" (for any other type of document).
 3. "issueDate": The issue or signing date ("дата на издаване / сключване") in YYYY-MM-DD format (e.g. "2026-06-23"). Return null if not found.
 4. "expiryDate": The expiration or validity date ("валиден до / срок на действие") in YYYY-MM-DD format. Return null if not found.
-5. "text": The full text transcript or key content of the document.
+5. "supplier": The name of the supplier, seller, vendor, or partner company mentioned in the document. Return null if not found.
+6. "products": If type is "trade", extract the list of products/items listed in the document. Return a JSON array of objects, where each object has: "product" (string, product name in Bulgarian/original), "batch" (string or null, batch/lot number if mentioned), "expiry" (string or null, expiry or best-before date in YYYY-MM-DD format). If no products are found or type is not "trade", return an empty array [].
+7. "text": The full text transcript or key content of the document.
 
 Rules:
-- Default to Bulgarian language for the "name" field if possible.
+- Default to Bulgarian language for the "name" and "supplier" fields if possible.
 - If it is a permit, certificate, license, or similar authorization, set type to "permit".
 - If it is a contract, agreement, annex, or deal, set type to "contract".
+- If it is a commercial offer, trade proposal, delivery protocol, supplier document/invoice, order, set type to "trade".
 - Otherwise, set type to "other".`;
 
     const requestBody = await prepareGeminiRequestBody(state.capturedImageBase64Docs, promptText, state.capturedFileExtensionDocs);
@@ -807,6 +823,8 @@ Rules:
         type: 'other',
         issueDate: null,
         expiryDate: null,
+        supplier: null,
+        products: [],
         text: responseText
       };
     }
@@ -1280,11 +1298,16 @@ function saveTranscription(parsedResult) {
   const isInvoiceKeyword = name.toLowerCase().includes('фактура') || 
                             (parsedResult.supplier && parsedResult.supplier.toLowerCase().includes('фактура'));
   
-  const isTaxesKeyword = name.toLowerCase().match(/(данък|осигуровки|данъци|ддс декларация|нп|такса|tax|social security|insurance)/) ||
-                         (parsedResult.supplier && parsedResult.supplier.toLowerCase().match(/(данък|осигуровки|данъци|ддс декларация|нп|такса|tax|social security|insurance)/));
-                            
+  const isTaxesKeyword = name.toLowerCase().match(/(данък|осигуровки|данъци|ддс декларация|нп|tax|social security|insurance)/) ||
+                         (parsedResult.supplier && parsedResult.supplier.toLowerCase().match(/(данък|осигуровки|данъци|ддс декларация|нп|tax|social security|insurance)/));
+                             
+  const isBillsKeyword = name.toLowerCase().match(/(ток|вода|интернет|парно|телефон|сметка|сметки|битова|услуга|услуги|такса|такси|а1|виваком|йеттел|yettel|vivacom|електрохолд|evn|енерго|софийска вода|bill|utility|utilities|service|services)/) ||
+                         (parsedResult.supplier && parsedResult.supplier.toLowerCase().match(/(ток|вода|интернет|парно|телефон|сметка|сметки|битова|услуга|услуги|такса|такси|а1|виваком|йеттел|yettel|vivacom|електрохолд|evn|енерго|софийска вода|bill|utility|utilities|service|services)/));
+                             
   let finalType = parsedResult.inferredType || 'other';
-  if (isInvoiceKeyword || finalType === 'invoice') {
+  if (finalType === 'bills' || isBillsKeyword) {
+    finalType = 'bills';
+  } else if (isInvoiceKeyword || finalType === 'invoice') {
     finalType = 'invoice';
   } else if (finalType === 'receipt') {
     finalType = 'receipt';
@@ -1343,6 +1366,8 @@ function saveGeneralDocTranscription(parsedResult) {
     image: state.capturedImageBase64Docs,
     issueDate: normalizeDate(parsedResult.issueDate) || new Date().toISOString().slice(0, 10),
     expiryDate: normalizeDate(parsedResult.expiryDate),
+    supplier: parsedResult.supplier || null,
+    products: parsedResult.products || [],
     text: parsedResult.text || '',
     timestamp: Date.now()
   };
@@ -1622,6 +1647,10 @@ function renderDocumentList() {
     doc.type === 'invoice' && matchesFilter(doc)
   );
   
+  const billsList = state.documents.filter(doc => 
+    doc.type === 'bills' && matchesFilter(doc)
+  );
+  
   const revenueInvoicesList = state.documents.filter(doc => 
     doc.type === 'revenue-invoice' && matchesFilter(doc)
   );
@@ -1639,16 +1668,19 @@ function renderDocumentList() {
   );
   
   // Update Tab Badges with count of matching items
-  elements.badgeCountInvoices.textContent = invoicesList.length;
-  elements.badgeCountRevenueInvoices.textContent = revenueInvoicesList.length;
-  elements.badgeCountReceipts.textContent = receiptsList.length;
-  elements.badgeCountTaxes.textContent = taxesList.length;
-  elements.badgeCountOther.textContent = otherList.length;
+  if (elements.badgeCountInvoices) elements.badgeCountInvoices.textContent = invoicesList.length;
+  if (elements.badgeCountBills) elements.badgeCountBills.textContent = billsList.length;
+  if (elements.badgeCountRevenueInvoices) elements.badgeCountRevenueInvoices.textContent = revenueInvoicesList.length;
+  if (elements.badgeCountReceipts) elements.badgeCountReceipts.textContent = receiptsList.length;
+  if (elements.badgeCountTaxes) elements.badgeCountTaxes.textContent = taxesList.length;
+  if (elements.badgeCountOther) elements.badgeCountOther.textContent = otherList.length;
   
   // 2. Select active list
   let activeDocs = [];
   if (state.activeTab === 'invoices') {
     activeDocs = invoicesList;
+  } else if (state.activeTab === 'bills') {
+    activeDocs = billsList;
   } else if (state.activeTab === 'revenue-invoices') {
     activeDocs = revenueInvoicesList;
   } else if (state.activeTab === 'receipts') {
@@ -1680,8 +1712,11 @@ function renderDocumentList() {
       emptyDesc = 'Опитайте да промените търсенето или филтъра за период.';
     } else {
       if (state.activeTab === 'invoices') {
-        emptyTitle = 'Няма запазени фактури';
-        emptyDesc = 'Всички фактури съдържащи думата "фактура" ще се появят тук.';
+        emptyTitle = 'Няма запазени документи за стока';
+        emptyDesc = 'Всички документи съдържащи стока ще се появят тук.';
+      } else if (state.activeTab === 'bills') {
+        emptyTitle = 'Няма запазени сметки';
+        emptyDesc = 'Всички сметки, услуги и битови сметки ще се появят тук.';
       } else if (state.activeTab === 'receipts') {
         emptyTitle = 'Няма запазени бележки';
         emptyDesc = 'Касовите бележки се сортират автоматично тук.';
@@ -1696,6 +1731,9 @@ function renderDocumentList() {
       </div>
     `;
     elements.invoiceSummary.classList.add('hidden');
+    if (elements.monthlyExpenseSummary) {
+      elements.monthlyExpenseSummary.classList.add('hidden');
+    }
     
     // Update pagination controls for empty list
     if (elements.pageIndicator) elements.pageIndicator.textContent = '1 / 1';
@@ -1869,6 +1907,10 @@ function renderDocumentList() {
   // Update and show Invoice total summation bar
   elements.invoiceTotalValue.textContent = `${totalSum.toFixed(2)} €`;
   elements.invoiceSummary.classList.remove('hidden');
+  if (elements.monthlyExpenseSummary) {
+    elements.monthlyExpenseSummary.classList.remove('hidden');
+    updateMonthlyExpenseTotal();
+  }
   
   if (window.lucide) window.lucide.createIcons();
 }
@@ -1885,6 +1927,7 @@ function renderGeneralDocumentList() {
   const matchesFilter = (doc) => {
     const matchesText = (
       doc.name.toLowerCase().includes(filter) || 
+      (doc.supplier || '').toLowerCase().includes(filter) ||
       (doc.text || '').toLowerCase().includes(filter)
     );
 
@@ -1904,6 +1947,10 @@ function renderGeneralDocumentList() {
     doc.type === 'contract' && matchesFilter(doc)
   );
   
+  const tradeList = state.generalDocs.filter(doc => 
+    doc.type === 'trade' && matchesFilter(doc)
+  );
+  
   const otherList = state.generalDocs.filter(doc => 
     doc.type === 'other' && matchesFilter(doc)
   );
@@ -1911,6 +1958,7 @@ function renderGeneralDocumentList() {
   // Update badges
   if (elements.badgeCountPermits) elements.badgeCountPermits.textContent = permitsList.length;
   if (elements.badgeCountContracts) elements.badgeCountContracts.textContent = contractsList.length;
+  if (elements.badgeCountTrade) elements.badgeCountTrade.textContent = tradeList.length;
   if (elements.badgeCountGeneralOther) elements.badgeCountGeneralOther.textContent = otherList.length;
   
   // Active list
@@ -1919,6 +1967,8 @@ function renderGeneralDocumentList() {
     activeDocs = permitsList;
   } else if (state.activeTabDocs === 'contract') {
     activeDocs = contractsList;
+  } else if (state.activeTabDocs === 'trade') {
+    activeDocs = tradeList;
   } else {
     activeDocs = otherList;
   }
@@ -1983,12 +2033,21 @@ function renderGeneralDocumentList() {
   // Render list header
   const header = document.createElement('div');
   header.className = 'invoice-header';
-  header.innerHTML = `
-    <div class="invoice-col">Име на документ</div>
-    <div class="invoice-col">Дата издаване</div>
-    <div class="invoice-col">Дата валидност</div>
-    <div class="invoice-col" style="text-align: right;">Файлове</div>
-  `;
+  if (state.activeTabDocs === 'trade') {
+    header.innerHTML = `
+      <div class="invoice-col">Доставчик</div>
+      <div class="invoice-col">Дата</div>
+      <div class="invoice-col"></div>
+      <div class="invoice-col" style="text-align: right;">Действия</div>
+    `;
+  } else {
+    header.innerHTML = `
+      <div class="invoice-col">Име на документ</div>
+      <div class="invoice-col">Дата издаване</div>
+      <div class="invoice-col">Дата валидност</div>
+      <div class="invoice-col" style="text-align: right;">Файлове</div>
+    `;
+  }
   listContainer.appendChild(header);
   
   const listWrapper = document.createElement('div');
@@ -2007,25 +2066,45 @@ function renderGeneralDocumentList() {
     const linkIcon = isImage ? 'image' : 'file-text';
     const linkLabel = isImage ? 'Снимка' : 'Файл';
     
-    item.innerHTML = `
-      <div class="invoice-col">
-        <span class="invoice-item-text main-party-text" title="${escapeHTML(doc.name)}">${escapeHTML(doc.name) || `<span class="text-muted">Без име</span>`}</span>
-      </div>
-      <div class="invoice-col">
-        <input type="date" class="invoice-item-input issue-date-input" value="${issueDateVal}" data-id="${doc.id}">
-      </div>
-      <div class="invoice-col">
-        <input type="date" class="invoice-item-input expiry-date-input" value="${expiryDateVal}" data-id="${doc.id}">
-      </div>
-      <div class="invoice-col invoice-actions">
-        <a class="invoice-action-link btn-view-doc-file" data-id="${doc.id}">
-          <i data-lucide="${linkIcon}"></i> <span class="btn-text">${linkLabel}</span>
-        </a>
-        <a class="invoice-action-link btn-row-delete-doc text-danger" data-id="${doc.id}" title="Изтрий">
-          <i data-lucide="trash-2"></i>
-        </a>
-      </div>
-    `;
+    if (state.activeTabDocs === 'trade') {
+      item.innerHTML = `
+        <div class="invoice-col">
+          <span class="invoice-item-text main-party-text" title="${escapeHTML(doc.supplier || doc.name)}">${escapeHTML(doc.supplier || doc.name) || `<span class="text-muted">Без доставчик</span>`}</span>
+        </div>
+        <div class="invoice-col">
+          <input type="date" class="invoice-item-input issue-date-input" value="${issueDateVal}" data-id="${doc.id}">
+        </div>
+        <div class="invoice-col"></div>
+        <div class="invoice-col invoice-actions">
+          <a class="invoice-action-link btn-view-doc-file" data-id="${doc.id}">
+            <i data-lucide="${linkIcon}"></i> <span class="btn-text">${linkLabel}</span>
+          </a>
+          <a class="invoice-action-link btn-row-delete-doc text-danger" data-id="${doc.id}" title="Изтрий">
+            <i data-lucide="trash-2"></i>
+          </a>
+        </div>
+      `;
+    } else {
+      item.innerHTML = `
+        <div class="invoice-col">
+          <span class="invoice-item-text main-party-text" title="${escapeHTML(doc.name)}">${escapeHTML(doc.name) || `<span class="text-muted">Без име</span>`}</span>
+        </div>
+        <div class="invoice-col">
+          <input type="date" class="invoice-item-input issue-date-input" value="${issueDateVal}" data-id="${doc.id}">
+        </div>
+        <div class="invoice-col">
+          <input type="date" class="invoice-item-input expiry-date-input" value="${expiryDateVal}" data-id="${doc.id}">
+        </div>
+        <div class="invoice-col invoice-actions">
+          <a class="invoice-action-link btn-view-doc-file" data-id="${doc.id}">
+            <i data-lucide="${linkIcon}"></i> <span class="btn-text">${linkLabel}</span>
+          </a>
+          <a class="invoice-action-link btn-row-delete-doc text-danger" data-id="${doc.id}" title="Изтрий">
+            <i data-lucide="trash-2"></i>
+          </a>
+        </div>
+      `;
+    }
     
     // Wire inputs
     const issueInput = item.querySelector('.issue-date-input');
@@ -2058,6 +2137,7 @@ function renderGeneralDocumentList() {
     }
     
     // Click actions
+    
     item.querySelector('.btn-view-doc-file').addEventListener('click', (e) => {
       e.stopPropagation();
       openFileInModal(doc.image, doc.name);
@@ -2505,11 +2585,32 @@ function renderStaffPersonDocs(person, docsList) {
 function openGeneralDocDetailsModal(doc) {
   state.currentlyViewingDocIdDocs = doc.id;
   
-  elements.viewDocName.value = doc.name || '';
+  const labelElem = document.getElementById('label-view-doc-name');
+  if (doc.type === 'trade') {
+    if (labelElem) labelElem.textContent = 'Доставчик / Supplier';
+    elements.viewDocName.placeholder = 'Доставчик...';
+    elements.viewDocName.value = doc.supplier || doc.name || '';
+  } else {
+    if (labelElem) labelElem.textContent = 'Име на документа / Document Name';
+    elements.viewDocName.placeholder = 'Договор, Разрешително...';
+    elements.viewDocName.value = doc.name || '';
+  }
+  
   elements.viewDocIssueDate.value = normalizeDate(doc.issueDate);
-  elements.viewDocExpiryDate.value = normalizeDate(doc.expiryDate);
+  if (elements.viewDocExpiryDate) {
+    elements.viewDocExpiryDate.value = normalizeDate(doc.expiryDate);
+  }
   elements.viewDocCategory.value = doc.type || 'other';
   elements.viewDocText.value = doc.text || '';
+  
+  if (doc.type === 'trade') {
+    if (elements.containerViewDocText) elements.containerViewDocText.classList.add('hidden');
+    if (elements.containerViewDocProducts) elements.containerViewDocProducts.classList.remove('hidden');
+    renderGeneralDocProducts(doc);
+  } else {
+    if (elements.containerViewDocText) elements.containerViewDocText.classList.remove('hidden');
+    if (elements.containerViewDocProducts) elements.containerViewDocProducts.classList.add('hidden');
+  }
   
   const isImage = doc.image && doc.image.startsWith('data:image/');
   
@@ -2540,6 +2641,88 @@ function openGeneralDocDetailsModal(doc) {
   if (window.lucide) window.lucide.createIcons();
 }
 
+function renderGeneralDocProducts(doc) {
+  const container = elements.modalDocProductsBody;
+  if (!container) return;
+  container.innerHTML = '';
+  
+  doc.products = doc.products || [];
+  
+  if (doc.products.length === 0) {
+    container.innerHTML = `
+      <tr class="empty-products-row">
+        <td colspan="4" style="text-align: center; color: var(--text-muted); padding: 1.5rem 0;">
+          Няма добавени продукти. Натиснете "Добави продукт", за да започнете.
+        </td>
+      </tr>
+    `;
+    return;
+  }
+  
+  doc.products.forEach((p, idx) => {
+    const row = document.createElement('tr');
+    
+    const prodName = p.product || '';
+    const prodBatch = p.batch || '';
+    const prodExpiry = p.expiry || '';
+    
+    row.innerHTML = `
+      <td>
+        <input type="text" class="products-table-input product-name-input" value="${escapeHTML(prodName)}" placeholder="Продукт...">
+      </td>
+      <td>
+        <input type="text" class="products-table-input product-batch-input" value="${escapeHTML(prodBatch)}" placeholder="Партида...">
+      </td>
+      <td>
+        <input type="date" class="products-table-input product-expiry-input" value="${prodExpiry}">
+      </td>
+      <td style="text-align: center;">
+        <button type="button" class="btn-row-delete-product text-danger" style="background: none; border: none; cursor: pointer; padding: 0.25rem;" title="Изтрий продукт">
+          <i data-lucide="trash-2" style="width: 16px; height: 16px;"></i>
+        </button>
+      </td>
+    `;
+    
+    const nameInp = row.querySelector('.product-name-input');
+    const batchInp = row.querySelector('.product-batch-input');
+    const expiryInp = row.querySelector('.product-expiry-input');
+    const deleteBtn = row.querySelector('.btn-row-delete-product');
+    
+    nameInp.addEventListener('input', (e) => {
+      p.product = e.target.value;
+      localStorage.setItem('saved_general_documents', JSON.stringify(state.generalDocs));
+    });
+    
+    batchInp.addEventListener('input', (e) => {
+      p.batch = e.target.value;
+      localStorage.setItem('saved_general_documents', JSON.stringify(state.generalDocs));
+    });
+    
+    expiryInp.addEventListener('input', (e) => {
+      p.expiry = e.target.value;
+      localStorage.setItem('saved_general_documents', JSON.stringify(state.generalDocs));
+    });
+    
+    expiryInp.addEventListener('click', (e) => {
+      if (typeof e.target.showPicker === 'function') {
+        try {
+          e.target.showPicker();
+        } catch (err) {}
+      }
+    });
+    
+    deleteBtn.addEventListener('click', () => {
+      doc.products.splice(idx, 1);
+      localStorage.setItem('saved_general_documents', JSON.stringify(state.generalDocs));
+      renderGeneralDocProducts(doc);
+    });
+    
+    container.appendChild(row);
+  });
+  
+  if (window.lucide) window.lucide.createIcons();
+}
+
 function openStaffDocDetailsModal(person, doc) {
   state.currentlyViewingStaffPersonId = person.id;
   state.currentlyViewingStaffDocId = doc.id;
@@ -2558,6 +2741,7 @@ function recalculateInvoiceTotal() {
   
   const tabToType = {
     'invoices': 'invoice',
+    'bills': 'bills',
     'revenue-invoices': 'revenue-invoice',
     'receipts': 'receipt',
     'taxes': 'taxes',
@@ -2590,6 +2774,7 @@ function recalculateInvoiceTotal() {
       totalSum += Number(d.totalAmount);
     }
   });
+
   elements.invoiceTotalValue.textContent = `${totalSum.toFixed(2)} €`;
 }
 
@@ -3661,6 +3846,7 @@ function setupEventListeners() {
         if (doc) {
           const tabToType = {
             'invoices': 'invoice',
+            'bills': 'bills',
             'revenue-invoices': 'revenue-invoice',
             'receipts': 'receipt',
             'taxes': 'taxes',
@@ -3833,7 +4019,12 @@ function setupEventListeners() {
     if (state.currentlyViewingDocIdDocs) {
       const doc = state.generalDocs.find(d => d.id === state.currentlyViewingDocIdDocs);
       if (doc) {
-        doc.name = e.target.value;
+        if (doc.type === 'trade') {
+          doc.supplier = e.target.value;
+          doc.name = e.target.value; // Sync with doc.name for search
+        } else {
+          doc.name = e.target.value;
+        }
         localStorage.setItem('saved_general_documents', JSON.stringify(state.generalDocs));
         renderGeneralDocumentList();
       }
@@ -3859,30 +4050,56 @@ function setupEventListeners() {
     }
   });
 
-  elements.viewDocExpiryDate.addEventListener('input', (e) => {
-    if (state.currentlyViewingDocIdDocs) {
-      const doc = state.generalDocs.find(d => d.id === state.currentlyViewingDocIdDocs);
-      if (doc) {
-        doc.expiryDate = e.target.value;
-        localStorage.setItem('saved_general_documents', JSON.stringify(state.generalDocs));
-        renderGeneralDocumentList();
+  if (elements.viewDocExpiryDate) {
+    elements.viewDocExpiryDate.addEventListener('input', (e) => {
+      if (state.currentlyViewingDocIdDocs) {
+        const doc = state.generalDocs.find(d => d.id === state.currentlyViewingDocIdDocs);
+        if (doc) {
+          doc.expiryDate = e.target.value;
+          localStorage.setItem('saved_general_documents', JSON.stringify(state.generalDocs));
+          renderGeneralDocumentList();
+        }
       }
-    }
-  });
+    });
 
-  elements.viewDocExpiryDate.addEventListener('click', (e) => {
-    if (typeof e.target.showPicker === 'function') {
-      try {
-        e.target.showPicker();
-      } catch (err) {}
-    }
-  });
+    elements.viewDocExpiryDate.addEventListener('click', (e) => {
+      if (typeof e.target.showPicker === 'function') {
+        try {
+          e.target.showPicker();
+        } catch (err) {}
+      }
+    });
+  }
 
   elements.viewDocCategory.addEventListener('change', (e) => {
     if (state.currentlyViewingDocIdDocs) {
       const doc = state.generalDocs.find(d => d.id === state.currentlyViewingDocIdDocs);
       if (doc) {
         doc.type = e.target.value;
+        
+        // Dynamically update the modal labels and inputs
+        const labelElem = document.getElementById('label-view-doc-name');
+        if (doc.type === 'trade') {
+          if (labelElem) labelElem.textContent = 'Доставчик / Supplier';
+          elements.viewDocName.placeholder = 'Доставчик...';
+          if (!doc.supplier) doc.supplier = doc.name || '';
+          elements.viewDocName.value = doc.supplier;
+          
+          // Toggle layout containers
+          if (elements.containerViewDocText) elements.containerViewDocText.classList.add('hidden');
+          if (elements.containerViewDocProducts) elements.containerViewDocProducts.classList.remove('hidden');
+          doc.products = doc.products || [];
+          renderGeneralDocProducts(doc);
+        } else {
+          if (labelElem) labelElem.textContent = 'Име на документа / Document Name';
+          elements.viewDocName.placeholder = 'Договор, Разрешително...';
+          elements.viewDocName.value = doc.name || '';
+          
+          // Toggle layout containers
+          if (elements.containerViewDocText) elements.containerViewDocText.classList.remove('hidden');
+          if (elements.containerViewDocProducts) elements.containerViewDocProducts.classList.add('hidden');
+        }
+        
         localStorage.setItem('saved_general_documents', JSON.stringify(state.generalDocs));
         renderGeneralDocumentList();
         showToast('Категорията е променена.', 'folder');
@@ -3905,6 +4122,20 @@ function setupEventListeners() {
       if (state.currentlyViewingDocIdDocs) {
         if (confirm('Наистина ли искате да изтриете този документ?')) {
           deleteGeneralDocument(state.currentlyViewingDocIdDocs);
+        }
+      }
+    });
+  }
+
+  if (elements.btnAddDocProduct) {
+    elements.btnAddDocProduct.addEventListener('click', () => {
+      if (state.currentlyViewingDocIdDocs) {
+        const doc = state.generalDocs.find(d => d.id === state.currentlyViewingDocIdDocs);
+        if (doc) {
+          doc.products = doc.products || [];
+          doc.products.push({ product: 'Нов продукт', batch: '', expiry: '' });
+          localStorage.setItem('saved_general_documents', JSON.stringify(state.generalDocs));
+          renderGeneralDocProducts(doc);
         }
       }
     });
@@ -4143,6 +4374,17 @@ function setupEventListeners() {
       state.activeSource = 'upload';
       updateSourceVisibility();
       stopCamera();
+    });
+  }
+
+  if (elements.btnPrevMonth) {
+    elements.btnPrevMonth.addEventListener('click', () => {
+      changeExpenseMonth(-1);
+    });
+  }
+  if (elements.btnNextMonth) {
+    elements.btnNextMonth.addEventListener('click', () => {
+      changeExpenseMonth(1);
     });
   }
 }
@@ -4892,6 +5134,49 @@ function handleRestoreFile(file) {
     });
   };
   reader.readAsArrayBuffer(file);
+}
+
+function changeExpenseMonth(direction) {
+  let [year, month] = state.activeExpenseMonth.split('-').map(Number);
+  month += direction;
+  if (month < 1) {
+    month = 12;
+    year -= 1;
+  } else if (month > 12) {
+    month = 1;
+    year += 1;
+  }
+  state.activeExpenseMonth = year + '-' + String(month).padStart(2, '0');
+  updateMonthlyExpenseTotal();
+}
+
+function updateMonthlyExpenseTotal() {
+  if (!elements.monthlyExpenseSummary || !elements.monthlyExpenseLabel || !elements.monthlyExpenseValue) return;
+  
+  const monthNamesBG = [
+    'Януари', 'Февруари', 'Март', 'Април', 'Май', 'Юни',
+    'Юли', 'Август', 'Септември', 'Октомври', 'Ноември', 'Декември'
+  ];
+  
+  const [year, month] = state.activeExpenseMonth.split('-').map(Number);
+  const bgMonthName = monthNamesBG[month - 1] + ' ' + year;
+  elements.monthlyExpenseLabel.textContent = `Общо разходи (${bgMonthName}):`;
+  
+  const expenseTypes = ['invoice', 'bills', 'receipt', 'taxes', 'other'];
+  let monthlyTotal = 0;
+  
+  state.documents.forEach(doc => {
+    if (expenseTypes.includes(doc.type)) {
+      const docDate = normalizeDate(doc.date);
+      if (docDate && docDate.startsWith(state.activeExpenseMonth)) {
+        if (doc.totalAmount != null) {
+          monthlyTotal += Number(doc.totalAmount);
+        }
+      }
+    }
+  });
+  
+  elements.monthlyExpenseValue.textContent = `${monthlyTotal.toFixed(2)} €`;
 }
 
 // Boot application

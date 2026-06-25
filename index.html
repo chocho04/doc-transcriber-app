@@ -172,8 +172,13 @@
               <div class="tabs-nav">
                 <button class="tab-link active" data-tab="invoices">
                   <i data-lucide="receipt"></i>
-                  <span>Фактури</span>
+                  <span>Стока</span>
                   <span id="badge-count-invoices" class="tab-badge">0</span>
+                </button>
+                <button class="tab-link" data-tab="bills">
+                  <i data-lucide="wallet"></i>
+                  <span>Сметки</span>
+                  <span id="badge-count-bills" class="tab-badge">0</span>
                 </button>
                 <button class="tab-link" data-tab="receipts">
                   <i data-lucide="ticket"></i>
@@ -182,12 +187,12 @@
                 </button>
                 <button class="tab-link" data-tab="taxes">
                   <i data-lucide="percent"></i>
-                  <span>Данъци/Осигуровки</span>
+                  <span>Данъци</span>
                   <span id="badge-count-taxes" class="tab-badge">0</span>
                 </button>
                 <button class="tab-link" data-tab="revenue-invoices">
                   <i data-lucide="file-spreadsheet"></i>
-                  <span>Приходни Фактури</span>
+                  <span>Приходи</span>
                   <span id="badge-count-revenue-invoices" class="tab-badge">0</span>
                 </button>
                 <button class="tab-link" data-tab="other">
@@ -199,7 +204,8 @@
 
               <!-- Page selector (positioned next to tabs) -->
               <div class="pagination-controls" id="pagination-container">
-                <button id="btn-add-expense-no-file" class="btn-pagination" title="Добави разход без файл" style="margin-right: 0.5rem; border: 1px solid var(--border-color); width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-sm);">
+                <button id="btn-add-expense-no-file" class="btn-pagination" title="Добави разход без файл"
+                  style="margin-right: 0.5rem; border: 1px solid var(--border-color); width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-sm);">
                   <i data-lucide="plus" style="width: 14px; height: 14px;"></i>
                 </button>
                 <button id="btn-prev-page" class="btn-pagination" title="Предишна страница / Previous Page">
@@ -230,6 +236,20 @@
                 <span class="mobile-text">Общо:</span>
               </div>
               <div id="invoice-total-value" class="summary-value">0.00 €</div>
+            </div>
+
+            <!-- Monthly Expenses Summary Bar (visible on all expense tabs) -->
+            <div id="monthly-expense-summary" class="monthly-expense-summary-bar hidden">
+              <button id="btn-prev-month" class="btn-month-nav" title="Предишен месец">
+                <i data-lucide="chevron-left"></i>
+              </button>
+              <div class="monthly-expense-content">
+                <span id="monthly-expense-label" class="monthly-expense-label">Общо разходи (Юни 2026):</span>
+                <span id="monthly-expense-value" class="monthly-expense-value">0.00 €</span>
+              </div>
+              <button id="btn-next-month" class="btn-month-nav" title="Следващ месец">
+                <i data-lucide="chevron-right"></i>
+              </button>
             </div>
           </div>
         </section>
@@ -432,6 +452,11 @@
                   <i data-lucide="file-signature"></i>
                   <span>Договори</span>
                   <span id="badge-count-contracts" class="tab-badge">0</span>
+                </button>
+                <button class="tab-link" data-tab="trade">
+                  <i data-lucide="briefcase"></i>
+                  <span>Търговски Документи</span>
+                  <span id="badge-count-trade" class="tab-badge">0</span>
                 </button>
                 <button class="tab-link" data-tab="other">
                   <i data-lucide="file"></i>
@@ -677,9 +702,7 @@
             </button>
           </div>
           <div class="view-text-pane">
-            <div class="pane-header">
-              <span>Екстрахирани данни / Extracted Details</span>
-            </div>
+
 
             <div class="details-edit-form">
               <div class="input-group-modal">
@@ -720,7 +743,8 @@
                 <div class="input-wrapper">
                   <i data-lucide="folder"></i>
                   <select id="view-category" class="modal-select">
-                    <option value="invoice">Фактура / Invoice</option>
+                    <option value="invoice">Стока / Goods Invoice</option>
+                    <option value="bills">Сметки / Bills</option>
                     <option value="receipt">Бележка / Receipt</option>
                     <option value="taxes">Данъци/Осигуровки / Taxes</option>
                     <option value="revenue-invoice">Приходна Фактура / Revenue Invoice</option>
@@ -756,9 +780,12 @@
         </div>
       </div>
       <div class="modal-footer">
-        <span id="view-date" class="text-muted">Saved on: --/--/----</span>
+        <span id="view-date" class="text-muted" style="margin-right: auto;">Saved on: --/--/----</span>
         <button id="btn-delete-doc" class="btn btn-danger">
-          <i data-lucide="trash-2"></i> Delete Entry
+          <i data-lucide="trash-2"></i> Изтрий
+        </button>
+        <button class="btn btn-primary" data-close="modal-view">
+          <i data-lucide="check"></i> Запази
         </button>
       </div>
     </div>
@@ -794,27 +821,18 @@
           <!-- Right: Editable Details -->
           <div class="details-form-side">
             <div class="input-group">
-              <label for="view-doc-name">Име на документа / Document Name</label>
+              <label for="view-doc-name" id="label-view-doc-name">Име на документа / Document Name</label>
               <div class="input-wrapper">
                 <i data-lucide="tag"></i>
                 <input type="text" id="view-doc-name" placeholder="Договор, Разрешително...">
               </div>
             </div>
 
-            <div class="grid-2-col" style="margin-top: 1.25rem;">
-              <div class="input-group">
-                <label for="view-doc-issue-date">Дата на издаване / Issue Date</label>
-                <div class="input-wrapper">
-                  <i data-lucide="calendar"></i>
-                  <input type="date" id="view-doc-issue-date">
-                </div>
-              </div>
-              <div class="input-group">
-                <label for="view-doc-expiry-date">Дата на валидност / Expiry Date</label>
-                <div class="input-wrapper">
-                  <i data-lucide="calendar-off"></i>
-                  <input type="date" id="view-doc-expiry-date">
-                </div>
+            <div class="input-group" style="margin-top: 1.25rem;">
+              <label for="view-doc-issue-date">Дата на издаване / Issue Date</label>
+              <div class="input-wrapper">
+                <i data-lucide="calendar"></i>
+                <input type="date" id="view-doc-issue-date">
               </div>
             </div>
 
@@ -822,26 +840,55 @@
               <label for="view-doc-category">Категория / Category</label>
               <div class="input-wrapper">
                 <i data-lucide="folder"></i>
-                <select id="view-doc-category" class="category-select">
+                <select id="view-doc-category" class="category-select modal-select">
                   <option value="permit">Разрешително</option>
                   <option value="contract">Договор</option>
+                  <option value="trade">Търговски Документ</option>
                   <option value="other">Друго</option>
                 </select>
               </div>
             </div>
 
-            <div class="input-group" style="margin-top: 1.25rem; flex-grow: 1; display: flex; flex-direction: column;">
+            <div id="container-view-doc-text" class="input-group"
+              style="margin-top: 1.25rem; flex-grow: 1; display: flex; flex-direction: column;">
               <label for="view-doc-text">Съдържание / Full Text</label>
               <textarea id="view-doc-text" class="modal-textarea" style="flex-grow: 1; min-height: 150px;"
                 placeholder="Пълен текст от документа..."></textarea>
+            </div>
+
+            <!-- Trade Documents Products Table -->
+            <div id="container-view-doc-products" class="input-group hidden"
+              style="margin-top: 1.25rem; flex-grow: 1; display: flex; flex-direction: column;">
+              <div class="products-table-wrapper" style="flex-grow: 1; min-height: 150px; max-height: 300px;">
+                <table class="products-table">
+                  <thead>
+                    <tr>
+                      <th>Продукт</th>
+                      <th style="width: 120px;">Партида</th>
+                      <th style="width: 140px;">Годност</th>
+                      <th style="width: 50px; text-align: center;">Изтрий</th>
+                    </tr>
+                  </thead>
+                  <tbody id="modal-doc-products-body">
+                    <!-- Dynamically populated via JS -->
+                  </tbody>
+                </table>
+              </div>
+              <button id="btn-add-doc-product" type="button" class="btn btn-sm btn-secondary"
+                style="margin-top: 10px; align-self: flex-start;">
+                <i data-lucide="plus"></i> Добави продукт
+              </button>
             </div>
           </div>
         </div>
       </div>
       <div class="modal-footer">
-        <span id="view-doc-saved-date" class="text-muted">Saved on: --/--/----</span>
+        <span id="view-doc-saved-date" class="text-muted" style="margin-right: auto;">Saved on: --/--/----</span>
         <button id="btn-delete-doc-general" class="btn btn-danger">
           <i data-lucide="trash-2"></i> Изтрий
+        </button>
+        <button class="btn btn-primary" data-close="modal-doc-details">
+          <i data-lucide="check"></i> Запази
         </button>
       </div>
     </div>
@@ -884,7 +931,10 @@
       </div>
       <div class="modal-footer">
         <button id="btn-delete-staff-doc-sub" class="btn btn-danger">
-          <i data-lucide="trash-2"></i> Изтрий документа
+          <i data-lucide="trash-2"></i> Изтрий
+        </button>
+        <button class="btn btn-primary" data-close="modal-staff-doc-details">
+          <i data-lucide="check"></i> Запази
         </button>
       </div>
     </div>

@@ -3112,3 +3112,164 @@ body.light-theme .staff-doc-name-input:focus {
     display: none !important;
   }
 }
+
+/* Monthly Expense Summary Bar */
+.monthly-expense-summary-bar {
+  background: rgba(239, 68, 68, 0.04);
+  border: 1px solid rgba(239, 68, 68, 0.15);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1.25rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 0.75rem;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+}
+
+body.dark-theme .monthly-expense-summary-bar {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
+.monthly-expense-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex-grow: 1;
+}
+
+.monthly-expense-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 0.25rem;
+  text-align: center;
+}
+
+.monthly-expense-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #ef4444; /* red */
+  text-align: center;
+  text-shadow: 0 0 10px rgba(239, 68, 68, 0.2);
+}
+
+.btn-month-nav {
+  background: none;
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 0.4rem;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  width: 32px;
+  height: 32px;
+}
+
+.btn-month-nav:hover {
+  background: var(--bg-hover);
+  border-color: var(--text-secondary);
+}
+
+.btn-month-nav i {
+  width: 18px;
+  height: 18px;
+}
+
+/* General Doc Details Modal Grid */
+.details-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+}
+
+@media (width >= 768px) {
+  .details-grid {
+    grid-template-columns: 4fr 6fr;
+  }
+}
+
+.details-preview-side {
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-image-preview {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  aspect-ratio: 4 / 5;
+  overflow: hidden;
+}
+
+.modal-image-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+}
+
+.details-form-side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* Document Preview Placeholder styling alias */
+.document-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: 1.5rem;
+  width: 100%;
+  height: 100%;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+.document-placeholder i.placeholder-icon {
+  width: 48px;
+  height: 48px;
+  color: var(--accent);
+}
+
+.document-placeholder .placeholder-filename {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+/* Textarea Consistency styling */
+.modal-textarea {
+  width: 100%;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.95rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-md);
+  transition: all var(--transition-fast);
+  resize: vertical;
+}
+
+.modal-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgb(0 210 255 / 15%);
+}
