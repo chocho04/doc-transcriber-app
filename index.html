@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DocuScribe AI - Document Transcriber</title>
+  <!-- Google Fonts: Outfit & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- JSZip CDN for backups -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+  <div class="app-wrapper">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <!-- Main Navigation Tab Buttons -->
+        <nav class="header-nav">
+          <button class="nav-btn active" data-page="invoices" id="nav-invoices">
+            <i data-lucide="dollar-sign"></i>
+            <span>Фактури</span>
+          </button>
+          <button class="nav-btn" data-page="documents" id="nav-documents">
+            <i data-lucide="file-text"></i>
+            <span>Документи</span>
+          </button>
+          <button class="nav-btn" data-page="staff" id="nav-staff">
+            <i data-lucide="user"></i>
+            <span>Персонал</span>
+          </button>
+        </nav>
+      </div>
+
+      <!-- Right: Theme Toggle -->
+      <div class="header-right">
+        <button id="btn-theme-toggle" class="theme-toggle-icon-btn" title="Toggle Light/Dark Mode">
+          <i id="theme-icon" data-lucide="sun"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Content Grid -->
+    <main class="main-grid">
+
+      <!-- VIEW 1: INVOICES (DEFAULT) -->
+      <div id="view-invoices" class="main-view-container">
+        <!-- Expand Capture Button -->
+        <button id="btn-expand-capture" class="btn-expand-capture">
+          <i data-lucide="plus-circle"></i>
+          <span>Снимай или качи нов документ (Фактура / Касов бон)</span>
+        </button>
+
+        <!-- Left Panel: Capture & Process -->
+        <section class="panel capture-panel hidden" id="capture-panel-invoices">
+          <div class="panel-header">
+            <i data-lucide="camera"></i>
+            <h2>Capture Document</h2>
+            <button class="btn-close-capture" id="btn-close-capture-invoices" title="Затвори">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+
+          <div class="panel-body">
+            <!-- Media Container (webcam feed / upload dropzone) -->
+            <div class="media-container">
+              <!-- Camera View -->
+              <div id="camera-view" class="media-view"></div>
+
+              <!-- Upload View -->
+              <div id="upload-view" class="media-view hidden">
+                <div id="dropzone" class="dropzone">
+                  <i data-lucide="file-up" class="dropzone-icon"></i>
+                  <p class="dropzone-text">Drag & drop your files here or <span>browse</span> (multiple files supported)
+                  </p>
+                  <input type="file" id="file-input" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.rtf"
+                    class="file-input-hidden" multiple>
+                </div>
+              </div>
+
+              <!-- Image Preview Overlay (shows captured/uploaded image) -->
+              <div id="preview-container" class="preview-overlay hidden">
+                <img id="image-preview" src="" alt="Captured document">
+                <button id="btn-rotate-preview" class="btn-circle rotate-preview-btn" title="Rotate 90° Clockwise">
+                  <i data-lucide="rotate-cw"></i>
+                </button>
+                <button id="btn-reset-preview" class="btn-circle reset-preview-btn" title="Discard Image">
+                  <i data-lucide="x"></i>
+                </button>
+              </div>
+            </div>
+
+            <!-- Capture Controls (Toggle + Meta + Action) -->
+            <div class="capture-controls">
+              <!-- Input Source Toggle -->
+              <div class="source-toggle">
+                <button id="toggle-camera" class="toggle-btn active">
+                  <i data-lucide="video"></i> Camera Feed
+                </button>
+                <button id="toggle-upload" class="toggle-btn">
+                  <i data-lucide="upload"></i> Upload File
+                </button>
+              </div>
+
+              <!-- Document Meta & Action -->
+              <div class="meta-section">
+                <!-- Mobile Scan Trigger -->
+                <button id="btn-mobile-camera" class="btn btn-secondary btn-block btn-mobile-scan mobile-only-block"
+                  style="margin-bottom: 0.75rem;">
+                  <i data-lucide="camera"></i>
+                  <span>Снимай Документ</span>
+                </button>
+                <input type="file" id="mobile-camera-input" accept="image/*" capture="environment"
+                  style="display: none;">
+
+                <button id="btn-transcribe" class="btn btn-primary btn-block btn-analyse" disabled>
+                  <i data-lucide="wand-2"></i>
+                  <span>Analyse</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Right Panel: List & Archives -->
+        <section class="panel list-panel">
+          <div class="panel-header">
+            <i data-lucide="archive"></i>
+            <h2>
+              <span class="desktop-text">Документи</span>
+              <span class="mobile-text">Документи</span>
+            </h2>
+            <span id="doc-count" class="badge badge-info">0 Entries</span>
+          </div>
+
+          <div class="panel-body list-body">
+            <!-- Controls Row: Date Filter + Search -->
+            <div class="controls-row">
+              <!-- Date range selector (left on desktop, hidden on mobile) -->
+              <div class="date-range-filter" id="date-range-container">
+                <input type="date" id="filter-start-date" class="filter-date-input" title="Начална дата / Start Date">
+                <span class="date-separator">до</span>
+                <input type="date" id="filter-end-date" class="filter-date-input" title="Крайна дата / End Date">
+                <button id="btn-clear-dates" class="btn-clear-dates"
+                  title="Изчисти филтъра за дата / Clear Date Filter">
+                  <i data-lucide="calendar-x"></i>
+                </button>
+              </div>
+
+              <!-- Search bar (middle, grows to fill space) -->
+              <div class="search-bar">
+                <i data-lucide="search"></i>
+                <input type="text" id="search-input" placeholder="Търсене ...">
+                <button id="btn-clear-search" class="btn-clear-search hidden" title="Изчисти търсенето">
+                  <i data-lucide="x"></i>
+                </button>
+              </div>
+            </div>
+
+            <!-- Tabs & Pagination Row -->
+            <div class="tabs-row-container">
+              <!-- Tabs Navigation -->
+              <div class="tabs-nav">
+                <button class="tab-link active" data-tab="invoices">
+                  <i data-lucide="receipt"></i>
+                  <span>Фактури</span>
+                  <span id="badge-count-invoices" class="tab-badge">0</span>
+                </button>
+                <button class="tab-link" data-tab="receipts">
+                  <i data-lucide="ticket"></i>
+                  <span>Бележки</span>
+                  <span id="badge-count-receipts" class="tab-badge">0</span>
+                </button>
+                <button class="tab-link" data-tab="taxes">
+                  <i data-lucide="percent"></i>
+                  <span>Данъци/Осигуровки</span>
+                  <span id="badge-count-taxes" class="tab-badge">0</span>
+                </button>
+                <button class="tab-link" data-tab="revenue-invoices">
+                  <i data-lucide="file-spreadsheet"></i>
+                  <span>Приходни Фактури</span>
+                  <span id="badge-count-revenue-invoices" class="tab-badge">0</span>
+                </button>
+                <button class="tab-link" data-tab="other">
+                  <i data-lucide="file-text"></i>
+                  <span>Други</span>
+                  <span id="badge-count-other" class="tab-badge">0</span>
+                </button>
+              </div>
+
+              <!-- Page selector (positioned next to tabs) -->
+              <div class="pagination-controls" id="pagination-container">
+                <button id="btn-add-expense-no-file" class="btn-pagination" title="Добави разход без файл" style="margin-right: 0.5rem; border: 1px solid var(--border-color); width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-sm);">
+                  <i data-lucide="plus" style="width: 14px; height: 14px;"></i>
+                </button>
+                <button id="btn-prev-page" class="btn-pagination" title="Предишна страница / Previous Page">
+                  <i data-lucide="chevron-left"></i>
+                </button>
+                <span id="page-indicator" class="page-indicator">1 / 1</span>
+                <button id="btn-next-page" class="btn-pagination" title="Следваща страница / Next Page">
+                  <i data-lucide="chevron-right"></i>
+                </button>
+              </div>
+            </div>
+
+            <!-- Document List Content -->
+            <div id="document-list" class="document-list">
+              <!-- Dynamically populated via JS -->
+              <div class="empty-state">
+                <i data-lucide="inbox"></i>
+                <h3>Няма запазени документи</h3>
+                <p>Снимайте или качете документ и го транскрибирайте, за да се появи тук.</p>
+              </div>
+            </div>
+
+            <!-- Invoice Summary Bar (only visible in invoices tab) -->
+            <div id="invoice-summary" class="invoice-summary-bar hidden">
+              <div class="summary-label">
+                <i data-lucide="calculator"></i>
+                <span class="desktop-text">Обща стойност с ДДС:</span>
+                <span class="mobile-text">Общо:</span>
+              </div>
+              <div id="invoice-total-value" class="summary-value">0.00 €</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Settings Toggle Button at the bottom of panel -->
+        <div class="settings-toggle-container"
+          style="display: flex; justify-content: center; margin-top: 1rem; margin-bottom: 0.5rem;">
+          <button id="btn-settings-gear" class="btn btn-secondary icon-btn"
+            style="gap: 0.5rem; padding: 0.6rem 1.2rem; border-radius: var(--radius-md);">
+            <i data-lucide="settings"></i>
+            <span>Настройки</span>
+          </button>
+        </div>
+
+        <!-- Bottom Panel: Settings & Data Portability -->
+        <footer class="panel backup-panel hidden" style="margin-top: 0.5rem;">
+          <div class="panel-body footer-settings-body">
+
+            <!-- Left Column: Settings -->
+            <div class="footer-settings-column">
+              <div class="footer-section-header">
+                <i data-lucide="settings" class="text-accent"></i>
+                <h3>Настройки / Settings</h3>
+              </div>
+              <div class="footer-settings-controls footer-settings-controls-row">
+                <div class="footer-company-group">
+                  <label for="header-company-input">Моята Фирма / My Company</label>
+                  <input type="text" id="header-company-input" class="header-company-input"
+                    placeholder="Въведете име на фирма...">
+                </div>
+                <div class="footer-settings-actions">
+                  <button id="btn-settings" class="btn btn-secondary icon-btn" title="Configure API Key">
+                    <i data-lucide="key"></i>
+                    <span>API Configuration</span>
+                  </button>
+                  <span id="api-key-badge" class="badge badge-error">
+                    <i data-lucide="circle-x"></i>
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Divider (desktop only) -->
+            <div class="footer-divider"></div>
+
+            <!-- Right Column: Backup & Restore -->
+            <div class="footer-settings-column">
+              <div class="footer-section-header">
+                <i data-lucide="database-backup" class="text-accent"></i>
+                <h3>Архивиране и Възстановяване / Backup & Restore</h3>
+              </div>
+              <div class="footer-settings-controls">
+                <p class="subtitle"
+                  style="font-size: 0.85rem; color: var(--text-secondary); text-align: center; margin-bottom: 0.5rem; line-height: 1.4;">
+                  Направете пълно резервно копие на вашите данни или качете архив, за да ги възстановите.
+                </p>
+                <div class="backup-actions">
+                  <button id="btn-backup" class="btn btn-secondary">
+                    <i data-lucide="download"></i>
+                    <span>Създай архив (ZIP)</span>
+                  </button>
+                  <button id="btn-restore" class="btn btn-secondary">
+                    <i data-lucide="upload"></i>
+                    <span>Възстанови от архив (ZIP)</span>
+                  </button>
+                  <input type="file" id="backup-file-input" accept=".zip" style="display: none;">
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </footer>
+      </div>
+
+      <!-- VIEW 2: DOCUMENTS -->
+      <div id="view-documents" class="main-view-container hidden">
+        <!-- Expand Capture Button -->
+        <button id="btn-expand-capture-docs" class="btn-expand-capture">
+          <i data-lucide="plus-circle"></i>
+          <span>Снимай или качи нов документ (Договор / Разрешително)</span>
+        </button>
+
+        <!-- Left Panel: Capture & Process (General Docs) -->
+        <section class="panel capture-panel hidden" id="capture-panel-docs">
+          <div class="panel-header">
+            <i data-lucide="camera"></i>
+            <h2>Capture Document</h2>
+            <button class="btn-close-capture" id="btn-close-capture-docs" title="Затвори">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+
+          <div class="panel-body">
+            <!-- Media Container (webcam feed / upload dropzone) -->
+            <div class="media-container">
+              <!-- Camera View -->
+              <div id="camera-view-docs" class="media-view"></div>
+
+              <!-- Upload View -->
+              <div id="upload-view-docs" class="media-view hidden">
+                <div id="dropzone-docs" class="dropzone">
+                  <i data-lucide="file-up" class="dropzone-icon"></i>
+                  <p class="dropzone-text">Drag & drop your files here or <span>browse</span> (multiple files supported)
+                  </p>
+                  <input type="file" id="file-input-docs"
+                    accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.rtf" class="file-input-hidden" multiple>
+                </div>
+              </div>
+
+              <!-- Image Preview Overlay (shows captured/uploaded image) -->
+              <div id="preview-container-docs" class="preview-overlay hidden">
+                <img id="image-preview-docs" src="" alt="Captured document">
+                <button id="btn-rotate-preview-docs" class="btn-circle rotate-preview-btn" title="Rotate 90° Clockwise">
+                  <i data-lucide="rotate-cw"></i>
+                </button>
+                <button id="btn-reset-preview-docs" class="btn-circle reset-preview-btn" title="Discard Image">
+                  <i data-lucide="x"></i>
+                </button>
+              </div>
+            </div>
+
+            <!-- Capture Controls (Toggle + Meta + Action) -->
+            <div class="capture-controls">
+              <!-- Input Source Toggle -->
+              <div class="source-toggle">
+                <button id="toggle-camera-docs" class="toggle-btn active">
+                  <i data-lucide="video"></i> Camera Feed
+                </button>
+                <button id="toggle-upload-docs" class="toggle-btn">
+                  <i data-lucide="upload"></i> Upload File
+                </button>
+              </div>
+
+              <!-- Document Meta & Action -->
+              <div class="meta-section">
+                <!-- Mobile Scan Trigger -->
+                <button id="btn-mobile-camera-docs"
+                  class="btn btn-secondary btn-block btn-mobile-scan mobile-only-block" style="margin-bottom: 0.75rem;">
+                  <i data-lucide="camera"></i>
+                  <span>Снимай Документ</span>
+                </button>
+                <input type="file" id="mobile-camera-input-docs" accept="image/*" capture="environment"
+                  style="display: none;">
+
+                <button id="btn-transcribe-docs" class="btn btn-primary btn-block btn-analyse" disabled>
+                  <i data-lucide="wand-2"></i>
+                  <span>Analyse</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Right Panel: List & Archives (General Docs) -->
+        <section class="panel list-panel">
+          <div class="panel-header">
+            <i data-lucide="archive"></i>
+            <h2>
+              <span class="desktop-text">Документи
+                <span class="mobile-text">Documents</span>
+            </h2>
+            <span id="doc-count-docs" class="badge badge-info">0 Entries</span>
+          </div>
+
+          <div class="panel-body list-body">
+            <!-- Controls Row: Date Filter + Search -->
+            <div class="controls-row">
+              <!-- Date range selector (left on desktop, hidden on mobile) -->
+              <div class="date-range-filter" id="date-range-container-docs">
+                <input type="date" id="filter-start-date-docs" class="filter-date-input"
+                  title="Начална дата / Start Date">
+                <span class="date-separator">до</span>
+                <input type="date" id="filter-end-date-docs" class="filter-date-input" title="Крайна дата / End Date">
+                <button id="btn-clear-dates-docs" class="btn-clear-dates"
+                  title="Изчисти филтъра за дата / Clear Date Filter">
+                  <i data-lucide="calendar-x"></i>
+                </button>
+              </div>
+
+              <!-- Search bar (middle, grows to fill space) -->
+              <div class="search-bar">
+                <i data-lucide="search"></i>
+                <input type="text" id="search-input-docs" placeholder="Търсене ...">
+                <button id="btn-clear-search-docs" class="btn-clear-search hidden" title="Изчисти търсенето">
+                  <i data-lucide="x"></i>
+                </button>
+              </div>
+            </div>
+
+            <!-- Tabs & Pagination Row -->
+            <div class="tabs-row-container">
+              <!-- Tabs Navigation -->
+              <div class="tabs-nav">
+                <button class="tab-link active" data-tab="permit">
+                  <i data-lucide="shield-check"></i>
+                  <span>Разрешителни</span>
+                  <span id="badge-count-permits" class="tab-badge">0</span>
+                </button>
+                <button class="tab-link" data-tab="contract">
+                  <i data-lucide="file-signature"></i>
+                  <span>Договори</span>
+                  <span id="badge-count-contracts" class="tab-badge">0</span>
+                </button>
+                <button class="tab-link" data-tab="other">
+                  <i data-lucide="file"></i>
+                  <span>Други</span>
+                  <span id="badge-count-general-other" class="tab-badge">0</span>
+                </button>
+              </div>
+
+              <!-- Page selector -->
+              <div class="pagination-controls" id="pagination-container-docs">
+                <button id="btn-prev-page-docs" class="btn-pagination" title="Предишна страница / Previous Page">
+                  <i data-lucide="chevron-left"></i>
+                </button>
+                <span id="page-indicator-docs" class="page-indicator">1 / 1</span>
+                <button id="btn-next-page-docs" class="btn-pagination" title="Следваща страница / Next Page">
+                  <i data-lucide="chevron-right"></i>
+                </button>
+              </div>
+            </div>
+
+            <!-- Document List Content -->
+            <div id="document-list-docs" class="document-list">
+              <div class="empty-state">
+                <i data-lucide="inbox"></i>
+                <h3>Няма запазени документи</h3>
+                <p>Снимайте или качете документ и го анализирайте с AI, за да се появи тук.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- VIEW 3: STAFF -->
+      <div id="view-staff" class="main-view-container hidden">
+        <!-- Expand Capture Button -->
+        <button id="btn-expand-capture-staff" class="btn-expand-capture">
+          <i data-lucide="plus-circle"></i>
+          <span>Снимай или качи нов документ на служител</span>
+        </button>
+
+        <!-- Left Panel: Capture & Process (Personnel Docs) -->
+        <section class="panel capture-panel hidden" id="capture-panel-staff">
+          <div class="panel-header">
+            <i data-lucide="camera"></i>
+            <h2>Capture Employee Document</h2>
+            <button class="btn-close-capture" id="btn-close-capture-staff" title="Затвори">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+
+          <div class="panel-body">
+            <!-- Media Container (webcam feed / upload dropzone) -->
+            <div class="media-container">
+              <!-- Camera View -->
+              <div id="camera-view-staff" class="media-view"></div>
+
+              <!-- Upload View -->
+              <div id="upload-view-staff" class="media-view hidden">
+                <div id="dropzone-staff" class="dropzone">
+                  <i data-lucide="file-up" class="dropzone-icon"></i>
+                  <p class="dropzone-text">Drag & drop employee files here or <span>browse</span> (multiple files
+                    supported)</p>
+                  <input type="file" id="file-input-staff"
+                    accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.rtf" class="file-input-hidden" multiple>
+                </div>
+              </div>
+
+              <!-- Image Preview Overlay (shows captured/uploaded image) -->
+              <div id="preview-container-staff" class="preview-overlay hidden">
+                <img id="image-preview-staff" src="" alt="Captured document">
+                <button id="btn-rotate-preview-staff" class="btn-circle rotate-preview-btn"
+                  title="Rotate 90° Clockwise">
+                  <i data-lucide="rotate-cw"></i>
+                </button>
+                <button id="btn-reset-preview-staff" class="btn-circle reset-preview-btn" title="Discard Image">
+                  <i data-lucide="x"></i>
+                </button>
+              </div>
+            </div>
+
+            <!-- Capture Controls (Toggle + Meta + Action) -->
+            <div class="capture-controls">
+              <!-- Input Source Toggle -->
+              <div class="source-toggle">
+                <button id="toggle-camera-staff" class="toggle-btn active">
+                  <i data-lucide="video"></i> Camera Feed
+                </button>
+                <button id="toggle-upload-staff" class="toggle-btn">
+                  <i data-lucide="upload"></i> Upload File
+                </button>
+              </div>
+
+              <!-- Document Meta & Action -->
+              <div class="meta-section">
+                <!-- Mobile Scan Trigger -->
+                <button id="btn-mobile-camera-staff"
+                  class="btn btn-secondary btn-block btn-mobile-scan mobile-only-block" style="margin-bottom: 0.75rem;">
+                  <i data-lucide="camera"></i>
+                  <span>Снимай Документ</span>
+                </button>
+                <input type="file" id="mobile-camera-input-staff" accept="image/*" capture="environment"
+                  style="display: none;">
+
+                <button id="btn-transcribe-staff" class="btn btn-primary btn-block btn-analyse" disabled>
+                  <i data-lucide="wand-2"></i>
+                  <span>Analyse</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Right Panel: Personnel List -->
+        <section class="panel list-panel">
+          <div class="panel-header">
+            <i data-lucide="users"></i>
+            <h2>
+              <span class="desktop-text">Personnel Directory</span>
+              <span class="mobile-text">Personnel</span>
+            </h2>
+            <span id="doc-count-staff" class="badge badge-info">0 People</span>
+          </div>
+
+          <div class="panel-body list-body">
+            <!-- Add Staff Button & Search bar -->
+            <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap;">
+              <button id="btn-add-staff" class="btn btn-primary"
+                style="display: inline-flex; align-items: center; gap: 0.5rem; white-space: nowrap;">
+                <i data-lucide="user-plus"></i>
+                <span>Добави Служител</span>
+              </button>
+              <div class="search-bar" style="flex-grow: 1; margin-bottom: 0;">
+                <i data-lucide="search"></i>
+                <input type="text" id="search-input-staff" placeholder="Търсене на служител ...">
+                <button id="btn-clear-search-staff" class="btn-clear-search hidden" title="Изчисти търсенето">
+                  <i data-lucide="x"></i>
+                </button>
+              </div>
+            </div>
+
+            <!-- Staff List Content -->
+            <div id="staff-list" class="staff-list">
+              <div class="empty-state">
+                <i data-lucide="users"></i>
+                <h3>Няма регистриран персонал</h3>
+                <p>Анализирайте документ, за да създадете служител и да добавите документи към него.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- Settings / API Key Modal -->
+  <div id="modal-settings" class="modal-backdrop hidden">
+    <div class="modal-content glassmorphism">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <i data-lucide="key" class="text-accent"></i>
+          <h3>Gemini API Configuration</h3>
+        </div>
+        <button class="modal-close" data-close="modal-settings">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">
+          To transcribe documents, this app uses Google's Gemini API directly from your browser. Your key is stored
+          locally in your browser and is never uploaded anywhere else.
+        </p>
+        <div class="input-group">
+          <label for="api-key-input">Gemini API Key</label>
+          <div class="input-wrapper">
+            <i data-lucide="lock"></i>
+            <input type="password" id="api-key-input" placeholder="AIzaSy...">
+          </div>
+          <p class="input-hint">
+            Don't have a key? You can get a free one from the <a href="https://aistudio.google.com/" target="_blank"
+              rel="noopener">Google AI Studio</a>.
+          </p>
+        </div>
+        <div class="input-group" style="margin-top: 1.25rem;">
+          <label for="my-company-input">Име на моята фирма / My Company Name</label>
+          <div class="input-wrapper">
+            <i data-lucide="building"></i>
+            <input type="text" id="my-company-input" placeholder="e.g., MyCompany Ltd.">
+          </div>
+          <p class="input-hint">
+            Въведете името на вашата фирма. Фактурите, в които вие сте "Доставчик", автоматично ще се сортират в таб
+            "Приходни Фактури".
+          </p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-save-key" class="btn btn-primary">Save Configuration</button>
+        <button class="btn btn-secondary" data-close="modal-settings">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image Lightbox Modal -->
+  <div id="modal-image" class="modal-backdrop hidden lightbox-backdrop">
+    <div class="lightbox-content">
+      <button class="lightbox-close" data-close="modal-image">&times;</button>
+      <img id="lightbox-img" src="" alt="Document Fullsize">
+      <iframe id="lightbox-iframe" class="hidden"
+        style="width: 85vw; height: 85vh; border: none; border-radius: var(--radius-md); background: white;"></iframe>
+      <div id="lightbox-text" class="hidden"
+        style="width: 80vw; height: 80vh; overflow: auto; padding: 2rem; background: var(--bg-secondary); border-radius: var(--radius-md); font-family: var(--font-mono); color: var(--text-primary); border: 1px solid var(--border-color); white-space: pre-wrap; text-align: left;">
+      </div>
+      <div id="lightbox-fallback" class="hidden"
+        style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.5rem; width: 60vw; max-width: 450px; padding: 3rem; background: var(--bg-secondary); border-radius: var(--radius-md); border: 1px solid var(--border-color); text-align: center; color: var(--text-primary);">
+        <i data-lucide="alert-triangle" style="width: 64px; height: 64px; color: var(--accent); margin: 0 auto;"></i>
+        <h4 style="font-size: 1.25rem; font-weight: 600; margin-top: 1rem;">Неподдържан файлов формат</h4>
+        <p style="font-size: 0.9rem; color: var(--text-secondary);">Този файл не може да се визуализира директно в
+          браузъра.</p>
+        <a id="btn-lightbox-download" class="btn btn-primary" href="" download
+          style="text-decoration: none; display: inline-flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem;">
+          <i data-lucide="download"></i> Свали файла
+        </a>
+      </div>
+      <div id="lightbox-caption" class="lightbox-caption">Document Image</div>
+    </div>
+  </div>
+
+
+  <!-- Document View Modal (Detailed Transcription) -->
+  <div id="modal-view" class="modal-backdrop hidden">
+    <div class="modal-content modal-lg glassmorphism">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <i data-lucide="file-text" class="text-accent"></i>
+          <h3 id="view-title">Document Name</h3>
+        </div>
+        <button class="modal-close" data-close="modal-view">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="view-grid">
+          <div class="view-image-pane">
+            <img id="view-img-preview" src="" alt="Attached document">
+            <button id="btn-view-expand" class="btn btn-xs btn-secondary">
+              <i data-lucide="maximize-2"></i> View Full Size
+            </button>
+          </div>
+          <div class="view-text-pane">
+            <div class="pane-header">
+              <span>Екстрахирани данни / Extracted Details</span>
+            </div>
+
+            <div class="details-edit-form">
+              <div class="input-group-modal">
+                <label>Доставчик / Supplier</label>
+                <div class="input-wrapper">
+                  <i data-lucide="building"></i>
+                  <input type="text" id="view-supplier" placeholder="Неизвестен / Unknown">
+                </div>
+              </div>
+
+              <div class="input-group-modal">
+                <label>Получател / Recipient</label>
+                <div class="input-wrapper">
+                  <i data-lucide="building-2"></i>
+                  <input type="text" id="view-recipient" placeholder="Неизвестен / Unknown">
+                </div>
+              </div>
+
+
+              <div class="input-group-modal">
+                <label>Дата / Date</label>
+                <div class="input-wrapper">
+                  <i data-lucide="calendar"></i>
+                  <input type="date" id="view-date-input" placeholder="дд.мм.гггг / YYYY-MM-DD">
+                </div>
+              </div>
+
+              <div class="input-group-modal">
+                <label>Сума (€) / Sum (€)</label>
+                <div class="input-wrapper">
+                  <i data-lucide="euro"></i>
+                  <input type="number" step="0.01" id="view-amount" placeholder="0.00">
+                </div>
+              </div>
+
+              <div class="input-group-modal">
+                <label>Категория / Category</label>
+                <div class="input-wrapper">
+                  <i data-lucide="folder"></i>
+                  <select id="view-category" class="modal-select">
+                    <option value="invoice">Фактура / Invoice</option>
+                    <option value="receipt">Бележка / Receipt</option>
+                    <option value="taxes">Данъци/Осигуровки / Taxes</option>
+                    <option value="revenue-invoice">Приходна Фактура / Revenue Invoice</option>
+                    <option value="other">Друго / Other</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="input-group-modal">
+                <label>Продукти / Products</label>
+                <div class="products-table-wrapper">
+                  <table class="products-table">
+                    <thead>
+                      <tr>
+                        <th>Продукт / Product Name</th>
+                        <th style="width: 80px; text-align: center;">Кол. / Qty</th>
+                        <th style="width: 120px; text-align: center;">Цена / Price</th>
+                        <th style="width: 50px; text-align: center;">Изтрий</th>
+                      </tr>
+                    </thead>
+                    <tbody id="modal-products-body">
+                      <!-- Dynamically populated via JS -->
+                    </tbody>
+                  </table>
+                </div>
+                <button id="btn-add-product" type="button" class="btn btn-sm btn-secondary"
+                  style="margin-top: 10px; align-self: flex-start;">
+                  <i data-lucide="plus"></i> Добави продукт
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span id="view-date" class="text-muted">Saved on: --/--/----</span>
+        <button id="btn-delete-doc" class="btn btn-danger">
+          <i data-lucide="trash-2"></i> Delete Entry
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- General Document View Modal (Detailed General Doc) -->
+  <div id="modal-doc-details" class="modal-backdrop hidden">
+    <div class="modal-content modal-lg glassmorphism">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <i data-lucide="file-text" class="text-accent"></i>
+          <h3>Детайли за документа</h3>
+        </div>
+        <button class="modal-close" data-close="modal-doc-details">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <div class="details-grid">
+          <!-- Left: Image Preview -->
+          <div class="details-preview-side">
+            <div id="modal-doc-preview-container" class="modal-image-preview">
+              <img id="modal-doc-preview-img" src="" alt="Document Preview">
+              <div id="modal-doc-preview-placeholder" class="document-placeholder hidden">
+                <i data-lucide="file-text" class="placeholder-icon"></i>
+                <span class="placeholder-filename">filename.pdf</span>
+              </div>
+            </div>
+            <button id="modal-doc-btn-view-full" class="btn btn-secondary btn-block" style="margin-top: 10px;">
+              <i data-lucide="maximize-2"></i> Виж в цял размер
+            </button>
+          </div>
+
+          <!-- Right: Editable Details -->
+          <div class="details-form-side">
+            <div class="input-group">
+              <label for="view-doc-name">Име на документа / Document Name</label>
+              <div class="input-wrapper">
+                <i data-lucide="tag"></i>
+                <input type="text" id="view-doc-name" placeholder="Договор, Разрешително...">
+              </div>
+            </div>
+
+            <div class="grid-2-col" style="margin-top: 1.25rem;">
+              <div class="input-group">
+                <label for="view-doc-issue-date">Дата на издаване / Issue Date</label>
+                <div class="input-wrapper">
+                  <i data-lucide="calendar"></i>
+                  <input type="date" id="view-doc-issue-date">
+                </div>
+              </div>
+              <div class="input-group">
+                <label for="view-doc-expiry-date">Дата на валидност / Expiry Date</label>
+                <div class="input-wrapper">
+                  <i data-lucide="calendar-off"></i>
+                  <input type="date" id="view-doc-expiry-date">
+                </div>
+              </div>
+            </div>
+
+            <div class="input-group" style="margin-top: 1.25rem;">
+              <label for="view-doc-category">Категория / Category</label>
+              <div class="input-wrapper">
+                <i data-lucide="folder"></i>
+                <select id="view-doc-category" class="category-select">
+                  <option value="permit">Разрешително</option>
+                  <option value="contract">Договор</option>
+                  <option value="other">Друго</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="input-group" style="margin-top: 1.25rem; flex-grow: 1; display: flex; flex-direction: column;">
+              <label for="view-doc-text">Съдържание / Full Text</label>
+              <textarea id="view-doc-text" class="modal-textarea" style="flex-grow: 1; min-height: 150px;"
+                placeholder="Пълен текст от документа..."></textarea>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span id="view-doc-saved-date" class="text-muted">Saved on: --/--/----</span>
+        <button id="btn-delete-doc-general" class="btn btn-danger">
+          <i data-lucide="trash-2"></i> Изтрий
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Staff Document View Modal (Detailed Staff Doc) -->
+  <div id="modal-staff-doc-details" class="modal-backdrop hidden">
+    <div class="modal-content modal-md glassmorphism">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <i data-lucide="user-check" class="text-accent"></i>
+          <h3>Детайли за документ на служител</h3>
+        </div>
+        <button class="modal-close" data-close="modal-staff-doc-details">&times;</button>
+      </div>
+
+      <div class="modal-body" style="display: flex; flex-direction: column; gap: 1.25rem;">
+        <div class="input-group">
+          <label for="view-staff-doc-name">Име на документа / Document Name</label>
+          <div class="input-wrapper">
+            <i data-lucide="tag"></i>
+            <input type="text" id="view-staff-doc-name" placeholder="Трудов договор...">
+          </div>
+        </div>
+
+        <div class="input-group">
+          <label for="view-staff-doc-upload-date">Дата на качване / Upload Date</label>
+          <div class="input-wrapper">
+            <i data-lucide="calendar"></i>
+            <input type="date" id="view-staff-doc-upload-date" readonly disabled
+              style="opacity: 0.65; cursor: not-allowed;">
+          </div>
+        </div>
+
+        <div class="input-group">
+          <label for="view-staff-doc-text">Съдържание / Full Text</label>
+          <textarea id="view-staff-doc-text" class="modal-textarea" style="min-height: 200px;"
+            placeholder="Пълен текст от документа..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-delete-staff-doc-sub" class="btn btn-danger">
+          <i data-lucide="trash-2"></i> Изтрий документа
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Employee Modal -->
+  <div id="modal-add-staff" class="modal-backdrop hidden">
+    <div class="modal-content modal-md glassmorphism">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <i data-lucide="user-plus" class="text-accent"></i>
+          <h3>Добави Служител</h3>
+        </div>
+        <button class="modal-close" data-close="modal-add-staff">&times;</button>
+      </div>
+      <div class="modal-body" style="display: flex; flex-direction: column; gap: 1.25rem;">
+        <div class="input-group-modal">
+          <label for="add-staff-name">Име / Name</label>
+          <div class="input-wrapper">
+            <i data-lucide="user"></i>
+            <input type="text" id="add-staff-name" placeholder="Въведете име на служител...">
+          </div>
+        </div>
+        <div class="input-group-modal">
+          <label for="add-staff-position">Длъжност / Position</label>
+          <div class="input-wrapper">
+            <i data-lucide="briefcase"></i>
+            <input type="text" id="add-staff-position" placeholder="Въведете длъжност (напр. Управител)...">
+          </div>
+        </div>
+        <div class="input-group-modal">
+          <label for="add-staff-date">Дата на назначаване / Hiring Date</label>
+          <div class="input-wrapper">
+            <i data-lucide="calendar"></i>
+            <input type="date" id="add-staff-date">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 0.75rem;">
+        <button class="btn btn-secondary" data-close="modal-add-staff">Отказ / Cancel</button>
+        <button id="btn-submit-add-staff" class="btn btn-primary">
+          <i data-lucide="check"></i> Добави / Save
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Expense without File Modal -->
+  <div id="modal-add-expense-no-file" class="modal-backdrop hidden">
+    <div class="modal-content modal-md glassmorphism">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <i data-lucide="plus-circle" class="text-accent"></i>
+          <h3>Добави разход без файл</h3>
+        </div>
+        <button class="modal-close" data-close="modal-add-expense-no-file">&times;</button>
+      </div>
+      <div class="modal-body" style="display: flex; flex-direction: column; gap: 1.25rem;">
+        <div class="input-group-modal">
+          <label for="add-expense-name">Име / Name (Доставчик/Описание)</label>
+          <div class="input-wrapper">
+            <i data-lucide="file-text"></i>
+            <input type="text" id="add-expense-name" placeholder="Въведете име или описание на разхода...">
+          </div>
+        </div>
+        <div class="input-group-modal">
+          <label for="add-expense-date">Дата / Date</label>
+          <div class="input-wrapper">
+            <i data-lucide="calendar"></i>
+            <input type="date" id="add-expense-date">
+          </div>
+        </div>
+        <div class="input-group-modal">
+          <label for="add-expense-amount">Сума / Amount (€)</label>
+          <div class="input-wrapper">
+            <i data-lucide="euro"></i>
+            <input type="number" step="0.01" id="add-expense-amount" placeholder="0.00">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 0.75rem;">
+        <button class="btn btn-secondary" data-close="modal-add-expense-no-file">Отказ / Cancel</button>
+        <button id="btn-submit-add-expense" class="btn btn-primary">
+          <i data-lucide="check"></i> Добави / Save
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notification Toast -->
+  <div id="toast" class="toast hidden">
+    <i data-lucide="info" id="toast-icon"></i>
+    <span id="toast-message">Notification message</span>
+  </div>
+
+  <!-- Hover Image Preview Container -->
+  <div id="hover-image-preview" class="hover-image-preview hidden">
+    <img id="hover-preview-img" src="" alt="Preview">
+  </div>
+
+  <!-- Mobile Loading Overlay -->
+  <div id="mobile-loading-overlay" class="modal-backdrop hidden" style="z-index: 9999; flex-direction: column;">
+    <i data-lucide="loader-2" class="animate-spin" style="width: 48px; height: 48px; color: var(--accent);"></i>
+    <h3 style="font-size: 1.25rem; font-weight: 600; margin-top: 1.25rem; color: #fff;">Анализиране на документа...</h3>
+    <p style="font-size: 0.9rem; color: var(--text-secondary); margin-top: 0.25rem;">Моля, изчакайте, Gemini извлича
+      данните.</p>
+  </div>
+
+  <!-- Custom Javascript -->
+  <script src="app.js"></script>
+</body>
+
+</html>
