@@ -40,7 +40,13 @@ let state = {
   currentlyViewingStaffDocId: null, // For staff sub-doc details
   theme: localStorage.getItem('theme') || 'dark', // 'dark' or 'light'
   myCompany: localStorage.getItem('my_company_name') || '',
-  isProcessingMultipleFiles: false
+  isProcessingMultipleFiles: false,
+  
+  // Page 3 (Staff) general docs state
+  activeTabStaffGen: 'payroll', // 'payroll', 'schedule', or 'other'
+  currentPageStaffGen: 1,
+  pageSizeStaffGen: 10,
+  staffGeneralDocs: JSON.parse(localStorage.getItem('saved_staff_general_documents')) || []
 };
 
 // DOM Elements
@@ -153,6 +159,7 @@ const elements = {
   badgeCountPermits: document.getElementById('badge-count-permits'),
   badgeCountContracts: document.getElementById('badge-count-contracts'),
   badgeCountTrade: document.getElementById('badge-count-trade'),
+  badgeCountStatement: document.getElementById('badge-count-statement'),
   badgeCountGeneralOther: document.getElementById('badge-count-general-other'),
   
   // View 3 (Personnel) Toggles & Panels
@@ -171,6 +178,16 @@ const elements = {
   searchInputStaff: document.getElementById('search-input-staff'),
   btnClearSearchStaff: document.getElementById('btn-clear-search-staff'),
   staffList: document.getElementById('staff-list'),
+  
+  // View 3 General Staff Docs Panel
+  badgeCountPayroll: document.getElementById('badge-count-payroll'),
+  badgeCountSchedule: document.getElementById('badge-count-schedule'),
+  badgeCountStaffOther: document.getElementById('badge-count-staff-other'),
+  staffGeneralDocsCount: document.getElementById('staff-general-docs-count'),
+  staffGenTabLinks: document.querySelectorAll('#panel-staff-general-docs .tab-link'),
+  btnPrevPageStaffGen: document.getElementById('btn-prev-page-staff-gen'),
+  btnNextPageStaffGen: document.getElementById('btn-next-page-staff-gen'),
+  pageIndicatorStaffGen: document.getElementById('page-indicator-staff-gen'),
   
   // Add Staff Modal Controls
   btnAddStaff: document.getElementById('btn-add-staff'),
@@ -257,6 +274,7 @@ function init() {
   renderDocumentList();
   renderGeneralDocumentList();
   renderStaffList();
+  renderStaffGeneralDocsList();
   setupEventListeners();
   
   // Responsive Source Selection
@@ -419,6 +437,7 @@ function switchPage(pageId) {
   } else if (pageId === 'staff') {
     if (state.activeSourceStaff === 'camera' && (!elements.capturePanelStaff.classList.contains('hidden') || isMobile)) startCamera();
     renderStaffList();
+    renderStaffGeneralDocsList();
   }
 }
 
@@ -720,7 +739,9 @@ Rules:
     saveTranscription(parsedResult);
     showToast('Документът е транскрибиран успешно!', 'check-circle');
     resetPreview();
-    collapseCapturePanel('invoices');
+    if (!isBatch) {
+      collapseCapturePanel('invoices');
+    }
     
   } catch (err) {
     console.error('Transcription error:', err);
@@ -775,7 +796,7 @@ async function transcribeGeneralDocument() {
     const promptText = `You are an expert document analyzer. Analyze the attached document image or file.
 Extract the document information and return a JSON object with the exact fields below:
 1. "name": A concise, descriptive name for the document in Bulgarian (e.g., "Разрешително за строеж", "Договор за наем", "Анекс към договор", "Сертификат за съответствие", etc.). If no name can be inferred, return "Документ".
-2. "type": Classify the document type. It MUST be one of: "permit" (for permits, licenses, certificates, authorizations), "contract" (for agreements, annexes, lease/sale contracts, work contracts), "trade" (for commercial offers, delivery notes/protocols, commercial/trade documents, purchase orders, trade agreements, supplier invoices/documents), or "other" (for any other type of document).
+2. "type": Classify the document type. It MUST be one of: "permit" (for permits, licenses, certificates, authorizations), "contract" (for agreements, annexes, lease/sale contracts, work contracts), "trade" (for commercial offers, delivery notes/protocols, commercial/trade documents, purchase orders, trade agreements, supplier invoices/documents), "statement" (for bank statements, bank extracts, account statements, financial statements), or "other" (for any other type of document).
 3. "issueDate": The issue or signing date ("дата на издаване / сключване") in YYYY-MM-DD format (e.g. "2026-06-23"). Return null if not found.
 4. "expiryDate": The expiration or validity date ("валиден до / срок на действие") in YYYY-MM-DD format. Return null if not found.
 5. "supplier": The name of the supplier, seller, vendor, or partner company mentioned in the document. Return null if not found.
@@ -787,6 +808,7 @@ Rules:
 - If it is a permit, certificate, license, or similar authorization, set type to "permit".
 - If it is a contract, agreement, annex, or deal, set type to "contract".
 - If it is a commercial offer, trade proposal, delivery protocol, supplier document/invoice, order, set type to "trade".
+- If it is a bank statement, bank extract, financial statement, account activity statement/extract, set type to "statement".
 - Otherwise, set type to "other".`;
 
     const requestBody = await prepareGeminiRequestBody(state.capturedImageBase64Docs, promptText, state.capturedFileExtensionDocs);
@@ -832,7 +854,9 @@ Rules:
     saveGeneralDocTranscription(parsedResult);
     showToast('Документът е анализиран успешно!', 'check-circle');
     resetPreviewDocs();
-    collapseCapturePanel('documents');
+    if (!isBatch) {
+      collapseCapturePanel('documents');
+    }
     
   } catch (err) {
     console.error('General doc transcription error:', err);
@@ -878,16 +902,22 @@ async function transcribeStaffDocument() {
   }
   
   try {
-    const promptText = `You are an expert document analyzer for human resources / personnel documents. Analyze the attached employee document.
+    const promptText = `You are an expert document analyzer for human resources / personnel documents. Analyze the attached employee/staff document.
 Extract the relevant details and return a JSON object with the exact fields below:
-1. "employeeName": The full name of the employee ("три имена на служителя" or "име на служителя") in Bulgarian, if found. Return null if not found.
-2. "employeePosition": The position / role / title of the employee ("длъжност"), if found. Return null if not found.
-3. "docName": The specific type or name of the document in Bulgarian (e.g., "Трудов договор", "Допълнително споразумение", "Заповед за отпуск", "Молба за напускане", etc.). If not found, return "Документ на служител".
-4. "hiringDate": The employee's hiring date ("дата на постъпване / трудов договор / назначение"), in YYYY-MM-DD format (e.g. "2026-06-23"). Look specifically for the start date of employment if it's a hiring document. Return null if not found.
-5. "fullText": The complete text transcript or key content of the document.
+1. "docCategory": Classify the document category. It MUST be one of:
+   - "payroll" (for payroll sheets, salary ledgers, payroll lists, "ведомости за заплати")
+   - "schedule" (for shift schedules, rosters, duty calendars, "графици за дежурства")
+   - "personal" (for employee-specific records like labor contracts, vacation requests, warnings, hiring/firing orders, personnel files)
+   - "other" (for general files, policies, or if category cannot be inferred)
+2. "employeeName": The full name of the employee ("три имена на служителя") in Bulgarian, if docCategory is "personal" (or if a specific employee name is prominent). Return null if not found.
+3. "employeePosition": The position/role/title of the employee ("длъжност"), if docCategory is "personal". Return null if not found.
+4. "docName": The specific name of the document in Bulgarian (e.g., "Ведомост за заплати - Юни 2026", "График за дежурства", "Трудов договор", "Молба за отпуск"). If not found, return "Документ".
+5. "issueDate": The signing, issue, or period date of the document in YYYY-MM-DD format. Look for payment dates or schedule month dates. Return null if not found.
+6. "hiringDate": The employee's hiring/start date in YYYY-MM-DD format, if docCategory is "personal". Return null if not found.
+7. "fullText": The complete text transcript or key content of the document.
 
 Rules:
-- Be very accurate in extracting the employee's name. Use the standard Bulgarian spelling as written in the document.`;
+- Be very accurate in extracting the names. Use standard Bulgarian spelling.`;
 
     const requestBody = await prepareGeminiRequestBody(state.capturedImageBase64Staff, promptText, state.capturedFileExtensionStaff);
     
@@ -919,9 +949,11 @@ Rules:
     } catch (jsonErr) {
       console.warn("Failed to parse Gemini response as JSON", jsonErr);
       parsedResult = {
+        docCategory: 'other',
         employeeName: null,
         employeePosition: null,
         docName: state.capturedFileNameStaff || 'Документ на служител',
+        issueDate: null,
         hiringDate: null,
         fullText: responseText
       };
@@ -930,7 +962,9 @@ Rules:
     saveStaffDocTranscription(parsedResult);
     showToast('Документът е анализиран успешно!', 'check-circle');
     resetPreviewStaff();
-    collapseCapturePanel('staff');
+    if (!isBatch) {
+      collapseCapturePanel('staff');
+    }
     
   } catch (err) {
     console.error('Staff doc transcription error:', err);
@@ -1388,14 +1422,45 @@ function saveGeneralDocTranscription(parsedResult) {
 }
 
 function saveStaffDocTranscription(parsedResult) {
-  const employeeName = (parsedResult.employeeName || '').trim();
-  const docName = parsedResult.docName || state.capturedFileNameStaff || 'Документ на служител';
+  const category = parsedResult.docCategory || 'other';
+  const docName = parsedResult.docName || state.capturedFileNameStaff || 'Документ';
+  const issueDate = normalizeDate(parsedResult.issueDate) || new Date().toISOString().slice(0, 10);
   
+  if (category === 'payroll' || category === 'schedule' || (category === 'other' && !parsedResult.employeeName)) {
+    // Save to general staff documents
+    const newGenDoc = {
+      id: 'sgdoc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+      name: docName,
+      type: category, // 'payroll', 'schedule', 'other'
+      image: state.capturedImageBase64Staff,
+      date: issueDate,
+      timestamp: Date.now()
+    };
+    
+    state.staffGeneralDocs.unshift(newGenDoc);
+    
+    try {
+      localStorage.setItem('saved_staff_general_documents', JSON.stringify(state.staffGeneralDocs));
+    } catch (e) {
+      console.error('Storage full, removing oldest entry', e);
+      if (state.staffGeneralDocs.length > 1) {
+        state.staffGeneralDocs.pop();
+        localStorage.setItem('saved_staff_general_documents', JSON.stringify(state.staffGeneralDocs));
+      }
+    }
+    
+    renderStaffGeneralDocsList();
+    showToast('Документът е записан в общите документи на персонала!', 'check-circle');
+    return;
+  }
+  
+  // Otherwise, it's a personal employee document
+  const employeeName = (parsedResult.employeeName || '').trim();
   const newSubDoc = {
     id: 'sdoc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
     name: docName,
     image: state.capturedImageBase64Staff,
-    uploadDate: new Date().toISOString().slice(0, 10),
+    uploadDate: issueDate,
     fullText: parsedResult.fullText || ''
   };
   
@@ -1430,7 +1495,7 @@ function saveStaffDocTranscription(parsedResult) {
       id: 'udoc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
       name: docName,
       image: state.capturedImageBase64Staff,
-      uploadDate: new Date().toISOString().slice(0, 10),
+      uploadDate: issueDate,
       extractedName: employeeName,
       extractedPosition: parsedResult.employeePosition ? parsedResult.employeePosition.trim() : '',
       extractedHiringDate: parsedResult.hiringDate ? normalizeDate(parsedResult.hiringDate) : '',
@@ -1951,6 +2016,10 @@ function renderGeneralDocumentList() {
     doc.type === 'trade' && matchesFilter(doc)
   );
   
+  const statementList = state.generalDocs.filter(doc => 
+    doc.type === 'statement' && matchesFilter(doc)
+  );
+  
   const otherList = state.generalDocs.filter(doc => 
     doc.type === 'other' && matchesFilter(doc)
   );
@@ -1959,6 +2028,7 @@ function renderGeneralDocumentList() {
   if (elements.badgeCountPermits) elements.badgeCountPermits.textContent = permitsList.length;
   if (elements.badgeCountContracts) elements.badgeCountContracts.textContent = contractsList.length;
   if (elements.badgeCountTrade) elements.badgeCountTrade.textContent = tradeList.length;
+  if (elements.badgeCountStatement) elements.badgeCountStatement.textContent = statementList.length;
   if (elements.badgeCountGeneralOther) elements.badgeCountGeneralOther.textContent = otherList.length;
   
   // Active list
@@ -1969,6 +2039,8 @@ function renderGeneralDocumentList() {
     activeDocs = contractsList;
   } else if (state.activeTabDocs === 'trade') {
     activeDocs = tradeList;
+  } else if (state.activeTabDocs === 'statement') {
+    activeDocs = statementList;
   } else {
     activeDocs = otherList;
   }
@@ -2040,6 +2112,13 @@ function renderGeneralDocumentList() {
       <div class="invoice-col"></div>
       <div class="invoice-col" style="text-align: right;">Действия</div>
     `;
+  } else if (state.activeTabDocs === 'statement') {
+    header.innerHTML = `
+      <div class="invoice-col">Банка/Институция</div>
+      <div class="invoice-col">Дата</div>
+      <div class="invoice-col"></div>
+      <div class="invoice-col" style="text-align: right;">Действия</div>
+    `;
   } else {
     header.innerHTML = `
       <div class="invoice-col">Име на документ</div>
@@ -2070,6 +2149,24 @@ function renderGeneralDocumentList() {
       item.innerHTML = `
         <div class="invoice-col">
           <span class="invoice-item-text main-party-text" title="${escapeHTML(doc.supplier || doc.name)}">${escapeHTML(doc.supplier || doc.name) || `<span class="text-muted">Без доставчик</span>`}</span>
+        </div>
+        <div class="invoice-col">
+          <input type="date" class="invoice-item-input issue-date-input" value="${issueDateVal}" data-id="${doc.id}">
+        </div>
+        <div class="invoice-col"></div>
+        <div class="invoice-col invoice-actions">
+          <a class="invoice-action-link btn-view-doc-file" data-id="${doc.id}">
+            <i data-lucide="${linkIcon}"></i> <span class="btn-text">${linkLabel}</span>
+          </a>
+          <a class="invoice-action-link btn-row-delete-doc text-danger" data-id="${doc.id}" title="Изтрий">
+            <i data-lucide="trash-2"></i>
+          </a>
+        </div>
+      `;
+    } else if (state.activeTabDocs === 'statement') {
+      item.innerHTML = `
+        <div class="invoice-col">
+          <span class="invoice-item-text main-party-text" title="${escapeHTML(doc.supplier || doc.name)}">${escapeHTML(doc.supplier || doc.name) || `<span class="text-muted">Без банка/институция</span>`}</span>
         </div>
         <div class="invoice-col">
           <input type="date" class="invoice-item-input issue-date-input" value="${issueDateVal}" data-id="${doc.id}">
@@ -2321,8 +2418,12 @@ function renderStaffList() {
         
         item.innerHTML = `
           <div class="staff-table-row">
-            <div class="staff-table-col font-semibold text-primary" title="${escapeHTML(person.name)}">${escapeHTML(person.name)}</div>
-            <div class="staff-table-col text-secondary" title="${escapeHTML(positionVal)}">${escapeHTML(positionVal)}</div>
+            <div class="staff-table-col font-semibold text-primary" style="overflow: visible;">
+              <input type="text" class="invoice-item-input staff-inline-name-input font-semibold text-primary" value="${escapeHTML(person.name)}" data-id="${person.id}" title="${escapeHTML(person.name)}" style="width: 100%; padding: 0.2rem 0.4rem;">
+            </div>
+            <div class="staff-table-col text-secondary" style="overflow: visible;">
+              <input type="text" class="invoice-item-input staff-inline-position-input text-secondary" value="${escapeHTML(person.position || '')}" placeholder="Неизвестна" data-id="${person.id}" title="${escapeHTML(person.position || 'Неизвестна')}" style="width: 100%; padding: 0.2rem 0.4rem;">
+            </div>
             <div class="staff-table-col">
               <input type="date" class="staff-inline-date-input date-hiring" value="${hiringDateVal}" data-id="${person.id}">
             </div>
@@ -2382,8 +2483,12 @@ function renderStaffList() {
       
       item.innerHTML = `
         <div class="staff-table-row past-staff-row">
-          <div class="staff-table-col text-muted" title="${escapeHTML(person.name)}">${escapeHTML(person.name)}</div>
-          <div class="staff-table-col text-muted" title="${escapeHTML(positionVal)}">${escapeHTML(positionVal)}</div>
+          <div class="staff-table-col text-muted" style="overflow: visible;">
+            <input type="text" class="invoice-item-input staff-inline-name-input text-muted" value="${escapeHTML(person.name)}" data-id="${person.id}" title="${escapeHTML(person.name)}" style="width: 100%; padding: 0.2rem 0.4rem;">
+          </div>
+          <div class="staff-table-col text-muted" style="overflow: visible;">
+            <input type="text" class="invoice-item-input staff-inline-position-input text-muted" value="${escapeHTML(person.position || '')}" placeholder="Неизвестна" data-id="${person.id}" title="${escapeHTML(person.position || 'Неизвестна')}" style="width: 100%; padding: 0.2rem 0.4rem;">
+          </div>
           <div class="staff-table-col">
             <input type="date" class="staff-inline-date-input date-hiring" value="${hiringDateVal}" data-id="${person.id}">
           </div>
@@ -2417,6 +2522,8 @@ function renderStaffList() {
 }
 
 function setupStaffItemEvents(item, person) {
+  const nameInput = item.querySelector('.staff-inline-name-input');
+  const positionInput = item.querySelector('.staff-inline-position-input');
   const hiringInput = item.querySelector('.date-hiring');
   const archiveInput = item.querySelector('.date-archive');
   const toggleFilesBtn = item.querySelector('.btn-toggle-files');
@@ -2425,6 +2532,33 @@ function setupStaffItemEvents(item, person) {
   const restoreBtn = item.querySelector('.btn-restore-staff');
   const filesPanel = item.querySelector('.staff-files-panel');
   const docsList = item.querySelector('.staff-docs-list');
+  
+  if (nameInput) {
+    nameInput.addEventListener('click', (e) => e.stopPropagation());
+    nameInput.addEventListener('change', (e) => {
+      const val = e.target.value.trim();
+      if (!val) {
+        showToast('Името не може да бъде празно.', 'alert-triangle');
+        e.target.value = person.name;
+        return;
+      }
+      person.name = val;
+      e.target.title = val;
+      localStorage.setItem('saved_staff', JSON.stringify(state.staff));
+      renderStaffList();
+    });
+  }
+  
+  if (positionInput) {
+    positionInput.addEventListener('click', (e) => e.stopPropagation());
+    positionInput.addEventListener('change', (e) => {
+      const val = e.target.value.trim();
+      person.position = val;
+      e.target.title = val || 'Неизвестна';
+      localStorage.setItem('saved_staff', JSON.stringify(state.staff));
+      renderStaffList();
+    });
+  }
   
   if (hiringInput) {
     hiringInput.addEventListener('click', (e) => {
@@ -2501,6 +2635,267 @@ function setupStaffItemEvents(item, person) {
         deleteStaffPerson(person.id);
       }
     });
+  }
+}
+
+function renderStaffGeneralDocsList() {
+  const listContainer = document.getElementById('staff-general-docs-list');
+  if (!listContainer) return;
+  listContainer.innerHTML = '';
+  
+  // Filter by active tab (payroll, schedule, other)
+  const activeTab = state.activeTabStaffGen || 'payroll';
+  
+  const filteredDocs = state.staffGeneralDocs.filter(doc => doc.type === activeTab);
+  
+  // Update badges
+  const payrollCount = state.staffGeneralDocs.filter(doc => doc.type === 'payroll').length;
+  const scheduleCount = state.staffGeneralDocs.filter(doc => doc.type === 'schedule').length;
+  const otherCount = state.staffGeneralDocs.filter(doc => doc.type === 'other').length;
+  
+  if (elements.badgeCountPayroll) elements.badgeCountPayroll.textContent = payrollCount;
+  if (elements.badgeCountSchedule) elements.badgeCountSchedule.textContent = scheduleCount;
+  if (elements.badgeCountStaffOther) elements.badgeCountStaffOther.textContent = otherCount;
+  
+  if (elements.staffGeneralDocsCount) {
+    elements.staffGeneralDocsCount.textContent = `${filteredDocs.length} Елем.`;
+  }
+  
+  if (filteredDocs.length === 0) {
+    listContainer.innerHTML = `
+      <div class="empty-state" style="padding: 2rem 1rem;">
+        <i data-lucide="inbox"></i>
+        <h3>Няма документи</h3>
+        <p>Снимайте или качете документ на служител, за да се появи тук.</p>
+      </div>
+    `;
+    if (elements.pageIndicatorStaffGen) elements.pageIndicatorStaffGen.textContent = '1 / 1';
+    if (elements.btnPrevPageStaffGen) elements.btnPrevPageStaffGen.disabled = true;
+    if (elements.btnNextPageStaffGen) elements.btnNextPageStaffGen.disabled = true;
+    if (window.lucide) window.lucide.createIcons();
+    return;
+  }
+  
+  // Pagination
+  const totalPages = Math.ceil(filteredDocs.length / state.pageSizeStaffGen) || 1;
+  if (state.currentPageStaffGen > totalPages) state.currentPageStaffGen = totalPages;
+  if (state.currentPageStaffGen < 1) state.currentPageStaffGen = 1;
+  
+  if (elements.pageIndicatorStaffGen) {
+    elements.pageIndicatorStaffGen.textContent = `${state.currentPageStaffGen} / ${totalPages}`;
+  }
+  if (elements.btnPrevPageStaffGen) {
+    elements.btnPrevPageStaffGen.disabled = state.currentPageStaffGen === 1;
+  }
+  if (elements.btnNextPageStaffGen) {
+    elements.btnNextPageStaffGen.disabled = state.currentPageStaffGen === totalPages;
+  }
+  
+  const startIndex = (state.currentPageStaffGen - 1) * state.pageSizeStaffGen;
+  const endIndex = startIndex + state.pageSizeStaffGen;
+  const paginatedDocs = filteredDocs.slice(startIndex, endIndex);
+  
+  // Generate employee options dynamically
+  const activeStaffOptions = state.staff
+    .filter(p => !p.isArchived)
+    .map(p => `<option value="person_${p.id}">${escapeHTML(p.name)}</option>`)
+    .join('');
+  
+  // Render header row
+  const header = document.createElement('div');
+  header.className = 'invoice-header';
+  header.innerHTML = `
+    <div class="invoice-col">Име</div>
+    <div class="invoice-col">Дата</div>
+    <div class="invoice-col">Премести в...</div>
+    <div class="invoice-col" style="text-align: right;">Действия</div>
+  `;
+  listContainer.appendChild(header);
+  
+  const listWrapper = document.createElement('div');
+  listWrapper.className = 'invoice-list';
+  
+  paginatedDocs.forEach(doc => {
+    const item = document.createElement('div');
+    item.className = 'invoice-item';
+    item.dataset.id = doc.id;
+    
+    const docDateVal = normalizeDate(doc.date) || new Date().toISOString().slice(0, 10);
+    const isImage = doc.image && doc.image.startsWith('data:image/');
+    const linkIcon = isImage ? 'image' : 'file-text';
+    const linkLabel = isImage ? 'Снимка' : 'Файл';
+    
+    item.innerHTML = `
+      <div class="invoice-col">
+        <input type="text" class="invoice-item-input staff-gen-name-input" value="${escapeHTML(doc.name)}" data-id="${doc.id}">
+      </div>
+      <div class="invoice-col">
+        <input type="date" class="invoice-item-input staff-gen-date-input" value="${docDateVal}" data-id="${doc.id}">
+      </div>
+      <div class="invoice-col">
+        <select class="staff-inline-select select-move-doc" data-id="${doc.id}" style="width: 100%; font-size: 0.8rem; padding: 0.25rem; border-radius: var(--radius-sm); background: var(--bg-secondary); border: 1px solid var(--border-color); color: var(--text-primary); cursor: pointer;">
+          <option value="">-- Премести в... --</option>
+          <optgroup label="Файлове на служител">
+            ${activeStaffOptions}
+          </optgroup>
+          <optgroup label="Друга категория">
+            <option value="cat_permit">Разрешителни</option>
+            <option value="cat_contract">Договори</option>
+            <option value="cat_trade">Търговски документи</option>
+            <option value="cat_statement">Извлечения</option>
+            <option value="cat_other">Други</option>
+          </optgroup>
+        </select>
+      </div>
+      <div class="invoice-col invoice-actions">
+        <a class="invoice-action-link btn-view-staff-gen-file" data-id="${doc.id}">
+          <i data-lucide="${linkIcon}"></i> <span class="btn-text">${linkLabel}</span>
+        </a>
+        <a class="invoice-action-link btn-delete-staff-gen text-danger" data-id="${doc.id}" title="Изтрий">
+          <i data-lucide="trash-2"></i>
+        </a>
+      </div>
+    `;
+    
+    // Bind inline editing of name
+    const nameInput = item.querySelector('.staff-gen-name-input');
+    nameInput.addEventListener('change', (e) => {
+      doc.name = e.target.value.trim() || 'Документ';
+      localStorage.setItem('saved_staff_general_documents', JSON.stringify(state.staffGeneralDocs));
+    });
+    
+    // Bind inline editing of date
+    const dateInput = item.querySelector('.staff-gen-date-input');
+    dateInput.addEventListener('click', (e) => {
+      if (typeof e.target.showPicker === 'function') {
+        try { e.target.showPicker(); } catch (err) {}
+      }
+    });
+    dateInput.addEventListener('change', (e) => {
+      doc.date = e.target.value;
+      localStorage.setItem('saved_staff_general_documents', JSON.stringify(state.staffGeneralDocs));
+    });
+    
+    // Bind move select dropdown
+    const moveSelect = item.querySelector('.select-move-doc');
+    moveSelect.addEventListener('change', (e) => {
+      const targetOption = e.target.value;
+      if (targetOption) {
+        const optionText = e.target.options[e.target.selectedIndex].text;
+        if (confirm(`Наистина ли искате да преместите този документ в "${optionText}"?`)) {
+          moveStaffGeneralDoc(doc.id, targetOption);
+        } else {
+          e.target.value = '';
+        }
+      }
+    });
+    
+    // View file action
+    item.querySelector('.btn-view-staff-gen-file').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openFileInModal(doc.image, doc.name);
+    });
+    
+    // Delete action
+    item.querySelector('.btn-delete-staff-gen').addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (confirm('Наистина ли искате да изтриете този документ?')) {
+        deleteStaffGeneralDocument(doc.id);
+      }
+    });
+    
+    listWrapper.appendChild(item);
+  });
+  
+  listContainer.appendChild(listWrapper);
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function deleteStaffGeneralDocument(id) {
+  state.staffGeneralDocs = state.staffGeneralDocs.filter(doc => doc.id !== id);
+  try {
+    localStorage.setItem('saved_staff_general_documents', JSON.stringify(state.staffGeneralDocs));
+  } catch (e) {
+    console.error('Storage error', e);
+  }
+  renderStaffGeneralDocsList();
+  showToast('Документът е изтрит.', 'trash');
+}
+
+function moveStaffGeneralDoc(docId, targetOption) {
+  if (!targetOption) return;
+
+  const docIndex = state.staffGeneralDocs.findIndex(d => d.id === docId);
+  if (docIndex === -1) {
+    showToast('Документът не беше намерен.', 'alert-triangle');
+    return;
+  }
+  const doc = state.staffGeneralDocs[docIndex];
+
+  // 1. Move to employee folder
+  if (targetOption.startsWith('person_')) {
+    const personId = targetOption.replace('person_', '');
+    const employee = state.staff.find(p => p.id === personId);
+    if (!employee) {
+      showToast('Служителят не беше намерен.', 'alert-triangle');
+      return;
+    }
+    
+    // Construct sub-document object
+    const subDoc = {
+      id: 'sdoc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+      name: doc.name,
+      image: doc.image,
+      uploadDate: doc.date || new Date().toISOString().slice(0, 10),
+      fullText: ''
+    };
+
+    if (!employee.documents) employee.documents = [];
+    employee.documents.unshift(subDoc);
+
+    // Remove from staff general documents
+    state.staffGeneralDocs.splice(docIndex, 1);
+
+    // Save states
+    localStorage.setItem('saved_staff', JSON.stringify(state.staff));
+    localStorage.setItem('saved_staff_general_documents', JSON.stringify(state.staffGeneralDocs));
+
+    // Refresh views
+    renderStaffGeneralDocsList();
+    renderStaffList();
+    showToast(`Документът е преместен в досието на ${employee.name}.`, 'check-circle');
+  }
+  // 2. Move to general documents (View 2) categories
+  else if (targetOption.startsWith('cat_')) {
+    const category = targetOption.replace('cat_', '');
+    
+    // Construct general documents entry
+    const newDoc = {
+      id: 'gdoc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
+      name: doc.name,
+      type: category, // 'permit', 'contract', 'trade', 'statement', 'other'
+      image: doc.image,
+      issueDate: doc.date || new Date().toISOString().slice(0, 10),
+      expiryDate: null,
+      supplier: null,
+      products: [],
+      text: '',
+      timestamp: Date.now()
+    };
+
+    state.generalDocs.unshift(newDoc);
+
+    // Remove from staff general documents
+    state.staffGeneralDocs.splice(docIndex, 1);
+
+    // Save states
+    localStorage.setItem('saved_general_documents', JSON.stringify(state.generalDocs));
+    localStorage.setItem('saved_staff_general_documents', JSON.stringify(state.staffGeneralDocs));
+
+    // Refresh views
+    renderStaffGeneralDocsList();
+    renderGeneralDocumentList();
+    showToast('Документът е преместен в секция Документи.', 'check-circle');
   }
 }
 
@@ -2589,6 +2984,10 @@ function openGeneralDocDetailsModal(doc) {
   if (doc.type === 'trade') {
     if (labelElem) labelElem.textContent = 'Доставчик / Supplier';
     elements.viewDocName.placeholder = 'Доставчик...';
+    elements.viewDocName.value = doc.supplier || doc.name || '';
+  } else if (doc.type === 'statement') {
+    if (labelElem) labelElem.textContent = 'Банка/Институция / Bank/Institution';
+    elements.viewDocName.placeholder = 'Банка/Институция...';
     elements.viewDocName.value = doc.supplier || doc.name || '';
   } else {
     if (labelElem) labelElem.textContent = 'Име на документа / Document Name';
@@ -3185,9 +3584,11 @@ function setupEventListeners() {
 
     state.currentPage = 1;
     state.currentPageDocs = 1;
+    state.currentPageStaffGen = 1;
     renderDocumentList();
     renderGeneralDocumentList();
     renderStaffList();
+    renderStaffGeneralDocsList();
   };
 
   // Add Staff Button
@@ -3801,6 +4202,35 @@ function setupEventListeners() {
     e.target.value = ''; // Reset file input
   });
 
+  // Staff General Documents Tab Links Click Listeners
+  if (elements.staffGenTabLinks) {
+    elements.staffGenTabLinks.forEach(tab => {
+      tab.addEventListener('click', () => {
+        elements.staffGenTabLinks.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        state.activeTabStaffGen = tab.getAttribute('data-tab');
+        state.currentPageStaffGen = 1;
+        renderStaffGeneralDocsList();
+      });
+    });
+  }
+
+  // Staff General Documents Pagination Click Listeners
+  if (elements.btnPrevPageStaffGen) {
+    elements.btnPrevPageStaffGen.addEventListener('click', () => {
+      if (state.currentPageStaffGen > 1) {
+        state.currentPageStaffGen--;
+        renderStaffGeneralDocsList();
+      }
+    });
+  }
+  if (elements.btnNextPageStaffGen) {
+    elements.btnNextPageStaffGen.addEventListener('click', () => {
+      state.currentPageStaffGen++;
+      renderStaffGeneralDocsList();
+    });
+  }
+
   // Drag Source Events (delegated on document list)
   elements.documentList.addEventListener('dragstart', (e) => {
     const item = e.target.closest('.invoice-item, .document-card');
@@ -4090,6 +4520,15 @@ function setupEventListeners() {
           if (elements.containerViewDocProducts) elements.containerViewDocProducts.classList.remove('hidden');
           doc.products = doc.products || [];
           renderGeneralDocProducts(doc);
+        } else if (doc.type === 'statement') {
+          if (labelElem) labelElem.textContent = 'Банка/Институция / Bank/Institution';
+          elements.viewDocName.placeholder = 'Банка/Институция...';
+          if (!doc.supplier) doc.supplier = doc.name || '';
+          elements.viewDocName.value = doc.supplier;
+          
+          // Toggle layout containers
+          if (elements.containerViewDocText) elements.containerViewDocText.classList.remove('hidden');
+          if (elements.containerViewDocProducts) elements.containerViewDocProducts.classList.add('hidden');
         } else {
           if (labelElem) labelElem.textContent = 'Име на документа / Document Name';
           elements.viewDocName.placeholder = 'Договор, Разрешително...';
@@ -4829,6 +5268,15 @@ async function processMultipleFiles(files, viewType) {
   btnElement.innerHTML = originalBtnHtml;
   if (window.lucide) window.lucide.createIcons();
 
+  // Collapse capture panel now that all files are analyzed
+  if (viewType === 'invoices') {
+    collapseCapturePanel('invoices');
+  } else if (viewType === 'docs') {
+    collapseCapturePanel('documents');
+  } else {
+    collapseCapturePanel('staff');
+  }
+
   // Final summary toast
   if (failCount === 0) {
     showToast(`Успешно обработени ${successCount} от ${total} файла!`, 'check-circle');
@@ -5024,6 +5472,7 @@ function backupDataZip() {
       saved_documents: state.documents,
       saved_general_documents: state.generalDocs,
       saved_staff: state.staff,
+      saved_staff_general_documents: state.staffGeneralDocs,
       gemini_api_key: state.apiKey,
       theme: state.theme,
       my_company_name: state.myCompany
@@ -5080,16 +5529,19 @@ function handleRestoreFile(file) {
             const docLen = data.saved_documents.length;
             const docGenLen = Array.isArray(data.saved_general_documents) ? data.saved_general_documents.length : 0;
             const staffLen = Array.isArray(data.saved_staff) ? data.saved_staff.length : 0;
-            const confirmMsg = `Потвърдете възстановяването на:\n- ${docLen} фактури/бележки\n- ${docGenLen} общи документи\n- ${staffLen} досиета на служители\nНастоящите ви данни ще бъдат презаписани!`;
+            const staffGenLen = Array.isArray(data.saved_staff_general_documents) ? data.saved_staff_general_documents.length : 0;
+            const confirmMsg = `Потвърдете възстановяването на:\n- ${docLen} фактури/бележки\n- ${docGenLen} общи документи\n- ${staffLen} досиета на служители\n- ${staffGenLen} общи документи на служители\nНастоящите ви данни ще бъдат презаписани!`;
             
             if (confirm(confirmMsg)) {
               localStorage.setItem('saved_documents', JSON.stringify(data.saved_documents));
               
               const restoredGeneralDocs = data.saved_general_documents || [];
               const restoredStaff = data.saved_staff || [];
+              const restoredStaffGeneralDocs = data.saved_staff_general_documents || [];
               
               localStorage.setItem('saved_general_documents', JSON.stringify(restoredGeneralDocs));
               localStorage.setItem('saved_staff', JSON.stringify(restoredStaff));
+              localStorage.setItem('saved_staff_general_documents', JSON.stringify(restoredStaffGeneralDocs));
               
               if (data.gemini_api_key !== undefined) {
                 localStorage.setItem('gemini_api_key', data.gemini_api_key);
@@ -5105,6 +5557,7 @@ function handleRestoreFile(file) {
               state.documents = data.saved_documents;
               state.generalDocs = restoredGeneralDocs;
               state.staff = restoredStaff;
+              state.staffGeneralDocs = restoredStaffGeneralDocs;
               state.apiKey = data.gemini_api_key || '';
               state.theme = data.theme || 'dark';
               state.myCompany = data.my_company_name || '';
@@ -5117,6 +5570,7 @@ function handleRestoreFile(file) {
               renderDocumentList();
               renderGeneralDocumentList();
               renderStaffList();
+              renderStaffGeneralDocsList();
               
               showToast('Данните са възстановени успешно!', 'check-circle');
             }

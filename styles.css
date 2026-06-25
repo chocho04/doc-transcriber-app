@@ -1461,11 +1461,23 @@ body.light-theme .invoice-header {
   border-color: rgb(255 255 255 / 10%);
 }
 
+body.light-theme .invoice-item-input:hover {
+  background: rgb(0 0 0 / 3%);
+  border-color: rgb(0 0 0 / 8%);
+}
+
 .invoice-item-input:focus {
   outline: none;
   background: var(--bg-primary);
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgb(0 210 255 / 15%);
+  color: var(--text-primary);
+}
+
+body.light-theme .invoice-item-input:focus {
+  background: var(--bg-primary);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgb(2 132 199 / 15%);
   color: var(--text-primary);
 }
 

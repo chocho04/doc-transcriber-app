@@ -458,6 +458,11 @@
                   <span>Търговски Документи</span>
                   <span id="badge-count-trade" class="tab-badge">0</span>
                 </button>
+                <button class="tab-link" data-tab="statement">
+                  <i data-lucide="file-text"></i>
+                  <span>Извлечения</span>
+                  <span id="badge-count-statement" class="tab-badge">0</span>
+                </button>
                 <button class="tab-link" data-tab="other">
                   <i data-lucide="file"></i>
                   <span>Други</span>
@@ -604,6 +609,58 @@
                 <h3>Няма регистриран персонал</h3>
                 <p>Анализирайте документ, за да създадете служител и да добавите документи към него.</p>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Panel: Staff General Documents (Payroll, Schedules, Other) -->
+        <section class="panel list-panel" id="panel-staff-general-docs" style="margin-top: 1.5rem;">
+          <div class="panel-header">
+            <i data-lucide="file-spreadsheet"></i>
+            <h2>
+              <span class="desktop-text">Документи на персонала</span>
+              <span class="mobile-text">Документи</span>
+            </h2>
+            <span id="staff-general-docs-count" class="badge badge-info">0 Елем.</span>
+          </div>
+
+          <div class="panel-body list-body">
+            <!-- Tabs & Pagination Row -->
+            <div class="tabs-row-container">
+              <!-- Tabs Navigation -->
+              <div class="tabs-nav">
+                <button class="tab-link active" data-tab="payroll">
+                  <i data-lucide="wallet"></i>
+                  <span>Ведомости</span>
+                  <span id="badge-count-payroll" class="tab-badge">0</span>
+                </button>
+                <button class="tab-link" data-tab="schedule">
+                  <i data-lucide="calendar"></i>
+                  <span>Графици</span>
+                  <span id="badge-count-schedule" class="tab-badge">0</span>
+                </button>
+                <button class="tab-link" data-tab="other">
+                  <i data-lucide="file"></i>
+                  <span>Други</span>
+                  <span id="badge-count-staff-other" class="tab-badge">0</span>
+                </button>
+              </div>
+              
+              <!-- Page selector -->
+              <div class="pagination-controls" id="pagination-container-staff-gen">
+                <button id="btn-prev-page-staff-gen" class="btn-pagination" title="Предишна страница">
+                  <i data-lucide="chevron-left"></i>
+                </button>
+                <span id="page-indicator-staff-gen" class="page-indicator">1 / 1</span>
+                <button id="btn-next-page-staff-gen" class="btn-pagination" title="Следваща страница">
+                  <i data-lucide="chevron-right"></i>
+                </button>
+              </div>
+            </div>
+
+            <!-- List Content -->
+            <div id="staff-general-docs-list" class="invoice-list" style="min-height: 200px;">
+              <!-- Dynamically populated via JS -->
             </div>
           </div>
         </section>
@@ -844,6 +901,7 @@
                   <option value="permit">Разрешително</option>
                   <option value="contract">Договор</option>
                   <option value="trade">Търговски Документ</option>
+                  <option value="statement">Извлечение</option>
                   <option value="other">Друго</option>
                 </select>
               </div>
