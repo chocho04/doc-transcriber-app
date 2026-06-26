@@ -1,0 +1,18 @@
+RewriteEngine On
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^api/convert-doc$ convert.php [L,QSA]
+RewriteRule ^api/convert-rtf$ convert.php [L,QSA]
+RewriteRule ^api/load-state$ api.php?action=load [L,QSA]
+RewriteRule ^api/save-state$ api.php?action=save [L,QSA]
+
+# Deny direct web access to SQLite and JSON database files
+<FilesMatch "(database\.sqlite|database\.json)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order deny,allow
+        Deny from all
+    </IfModule>
+</FilesMatch>

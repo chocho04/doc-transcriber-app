@@ -3424,12 +3424,6 @@ body.dark-theme .monthly-expense-summary-bar {
   height: 22px;
 }
 
-.auth-hint {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  margin-top: 1rem;
-}
-
 @keyframes shake {
   0%, 100% { transform: translateX(0); }
   20%, 60% { transform: translateX(-10px); }
@@ -3471,4 +3465,23 @@ body.light-theme .pin-key {
 body.light-theme .pin-key:hover {
   background: rgba(2, 132, 199, 0.05);
   border-color: var(--accent);
+}
+
+/* Autofill override to prevent white/yellow background in dark mode */
+input:-webkit-autofill,
+input:-webkit-autofill:hover, 
+input:-webkit-autofill:focus, 
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
+  -webkit-text-fill-color: var(--text-primary) !important;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+/* Disable default utility styling on type="search" to match design */
+input[type="search"]::-webkit-search-decoration,
+input[type="search"]::-webkit-search-cancel-button,
+input[type="search"]::-webkit-search-results-button,
+input[type="search"]::-webkit-search-results-decoration {
+  display: none;
+  -webkit-appearance: none;
 }

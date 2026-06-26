@@ -1,3 +1,101 @@
+// Intercept localStorage.setItem to sync state updates to the database
+(function() {
+  const originalSetItem = localStorage.setItem;
+  localStorage.setItem = function(key, value) {
+    originalSetItem.call(localStorage, key, value);
+    
+    const syncKeys = [
+      'saved_documents',
+      'saved_general_documents',
+      'saved_staff',
+      'saved_staff_general_documents',
+      'saved_unattached_staff_docs',
+      'gemini_api_key',
+      'cloudconvert_api_key',
+      'my_company_name',
+      'app_access_pin',
+      'theme'
+    ];
+    
+    if (syncKeys.includes(key) && typeof state !== 'undefined' && !state.isSyncingSuspended) {
+      syncToDatabase(key, value);
+    }
+  };
+})();
+
+function syncToDatabase(key, value) {
+  const route = 'api/save-state';
+  const apiEndpoint = window.location.protocol === 'file:'
+    ? `http://127.0.0.1:8080/${route}`
+    : route;
+
+  fetch(apiEndpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ key, value })
+  })
+  .then(async response => {
+    if (!response.ok) {
+      let errMsg = `Status ${response.status}`;
+      try {
+        const errJson = await response.json();
+        if (errJson && errJson.error) {
+          errMsg = errJson.error;
+        }
+      } catch (e) {}
+      
+      console.warn(`Database sync failed for key ${key}: ${errMsg}`);
+      if (typeof showToast === 'function') {
+        showToast(`Грешка при синхронизация: ${errMsg}`, 'alert-triangle');
+      }
+    }
+  })
+  .catch(err => {
+    console.warn(`Database sync network error for key ${key}:`, err);
+  });
+}
+
+async function preloadStateFromDatabase() {
+  const apiEndpoint = window.location.protocol === 'file:'
+    ? 'http://127.0.0.1:8080/api/load-state'
+    : 'api/load-state';
+    
+  try {
+    const response = await fetch(apiEndpoint);
+    if (!response.ok) {
+      throw new Error(`State load failed: ${response.status}`);
+    }
+    
+    const result = await response.json();
+    if (result && result.success && result.data) {
+      state.isSyncingSuspended = true;
+      
+      for (const [key, value] of Object.entries(result.data)) {
+        if (value !== null && value !== undefined) {
+          localStorage.setItem(key, value);
+        }
+      }
+      
+      // Update memory state properties from the loaded database values
+      if (result.data['gemini_api_key'] !== undefined) state.apiKey = result.data['gemini_api_key'] || '';
+      if (result.data['cloudconvert_api_key'] !== undefined) state.cloudConvertApiKey = result.data['cloudconvert_api_key'] || '';
+      if (result.data['saved_documents'] !== undefined) state.documents = JSON.parse(result.data['saved_documents']) || [];
+      if (result.data['saved_general_documents'] !== undefined) state.generalDocs = JSON.parse(result.data['saved_general_documents']) || [];
+      if (result.data['saved_staff'] !== undefined) state.staff = JSON.parse(result.data['saved_staff']) || [];
+      if (result.data['saved_unattached_staff_docs'] !== undefined) state.unattachedStaffDocs = JSON.parse(result.data['saved_unattached_staff_docs']) || [];
+      if (result.data['saved_staff_general_documents'] !== undefined) state.staffGeneralDocs = JSON.parse(result.data['saved_staff_general_documents']) || [];
+      if (result.data['my_company_name'] !== undefined) state.myCompany = result.data['my_company_name'] || '';
+      if (result.data['theme'] !== undefined) state.theme = result.data['theme'] || 'dark';
+      
+      state.isSyncingSuspended = false;
+    }
+  } catch (err) {
+    console.warn('Database preload failed, falling back to local client state:', err);
+  }
+}
+
 // State Management
 let state = {
   apiKey: localStorage.getItem('gemini_api_key') || '',
@@ -47,7 +145,9 @@ let state = {
   activeTabStaffGen: 'payroll', // 'payroll', 'schedule', or 'other'
   currentPageStaffGen: 1,
   pageSizeStaffGen: 10,
-  staffGeneralDocs: JSON.parse(localStorage.getItem('saved_staff_general_documents')) || []
+  staffGeneralDocs: JSON.parse(localStorage.getItem('saved_staff_general_documents')) || [],
+  
+  isSyncingSuspended: false
 };
 
 // DOM Elements
@@ -281,7 +381,38 @@ function init() {
   if (elements.appPinInput) {
     elements.appPinInput.value = localStorage.getItem('app_access_pin') || '1234';
   }
-  
+  // Ensure search fields are cleared on startup to prevent browser autofill bugs
+  let userInteractedWithSearch = {
+    'search-input': false,
+    'search-input-docs': false,
+    'search-input-staff': false
+  };
+
+  const searchIDs = ['search-input', 'search-input-docs', 'search-input-staff'];
+  searchIDs.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      el.value = '';
+      el.addEventListener('input', () => userInteractedWithSearch[id] = true);
+      el.addEventListener('focus', () => userInteractedWithSearch[id] = true);
+    }
+  });
+
+  const clearIfAutofilled = () => {
+    searchIDs.forEach(id => {
+      const el = document.getElementById(id);
+      if (el && !userInteractedWithSearch[id] && el.value !== '') {
+        el.value = '';
+        el.dispatchEvent(new Event('input'));
+      }
+    });
+  };
+
+  // Run periodic clear checks over the first 5 seconds to wipe out lazy/async browser autofill
+  [50, 150, 300, 600, 1000, 1500, 2000, 3000, 5000].forEach(delay => {
+    setTimeout(clearIfAutofilled, delay);
+  });
+
   renderDocumentList();
   renderGeneralDocumentList();
   renderStaffList();
@@ -300,7 +431,7 @@ function init() {
   
   const activePanel = state.activePage === 'invoices' ? elements.capturePanelInvoices : (state.activePage === 'documents' ? elements.capturePanelDocs : elements.capturePanelStaff);
   const activeSrc = state.activePage === 'invoices' ? state.activeSource : (state.activePage === 'documents' ? state.activeSourceDocs : state.activeSourceStaff);
-  const isAuthenticated = sessionStorage.getItem('authenticated') === 'true';
+  const isAuthenticated = localStorage.getItem('authenticated') === 'true';
   if (isAuthenticated && activeSrc === 'camera' && activePanel && (!activePanel.classList.contains('hidden') || isMobile)) {
     startCamera();
   } else {
@@ -3863,11 +3994,6 @@ function setupEventListeners() {
       localStorage.setItem('app_access_pin', pin);
       showToast('PIN кодът е променен.', 'check-circle');
       
-      const authHint = document.querySelector('.auth-hint');
-      if (authHint) {
-        authHint.textContent = `За развойна среда: PIN е ${pin}`;
-      }
-      
       const dotsContainer = document.querySelector('.pin-dots');
       if (dotsContainer) {
         dotsContainer.innerHTML = '';
@@ -5337,7 +5463,7 @@ async function convertFileToPdf(file) {
   
   const apiEndpoint = window.location.protocol === 'file:'
     ? `http://127.0.0.1:8080/api/convert-to-pdf`
-    : '/api/convert-to-pdf';
+    : 'api/convert-to-pdf';
     
   const response = await fetch(apiEndpoint, {
     method: 'POST',
@@ -5855,18 +5981,13 @@ function initPINAuthentication() {
   if (!overlay) return;
   
   // If already authenticated, do nothing
-  if (sessionStorage.getItem('authenticated') === 'true') {
+  if (localStorage.getItem('authenticated') === 'true') {
     overlay.classList.add('hidden');
     return;
   }
   
   const correctPIN = localStorage.getItem('app_access_pin') || '1234';
   const targetLength = correctPIN.length;
-
-  const authHint = overlay.querySelector('.auth-hint');
-  if (authHint) {
-    authHint.textContent = `За развойна среда: PIN е ${correctPIN}`;
-  }
   
   // Dynamically generate the dot spans based on the PIN length
   const dotsContainer = overlay.querySelector('.pin-dots');
@@ -5914,7 +6035,7 @@ function initPINAuthentication() {
     if (enteredPIN.length === targetLength) {
       if (enteredPIN === correctPIN) {
         // Authenticated!
-        sessionStorage.setItem('authenticated', 'true');
+        localStorage.setItem('authenticated', 'true');
         overlay.classList.add('hidden');
         showToast('Успешен достъп!', 'check-circle');
         
@@ -5948,7 +6069,7 @@ function initPINAuthentication() {
   // Also support physical keyboard inputs
   document.addEventListener('keydown', (e) => {
     // If overlay is hidden, don't capture key presses
-    if (overlay.classList.contains('hidden') || sessionStorage.getItem('authenticated') === 'true') {
+    if (overlay.classList.contains('hidden') || localStorage.getItem('authenticated') === 'true') {
       return;
     }
     
@@ -5962,5 +6083,12 @@ function initPINAuthentication() {
   });
 }
 
-// Boot application
-document.addEventListener('DOMContentLoaded', init);
+// Boot application with database preload
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    await preloadStateFromDatabase();
+  } catch (err) {
+    console.warn('Database preload failed, falling back to local client state:', err);
+  }
+  init();
+});

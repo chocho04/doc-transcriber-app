@@ -20,6 +20,12 @@
 </head>
 
 <body>
+  <!-- Fake inputs to prevent browser credentials autofill on search fields -->
+  <div style="position: absolute; top: 0; left: 0; width: 1px; height: 1px; overflow: hidden; opacity: 0.01; pointer-events: none; z-index: -1;">
+    <input type="text" name="prevent_autofill_username" tabindex="-1" autocomplete="username">
+    <input type="password" name="prevent_autofill_password" tabindex="-1" autocomplete="current-password">
+  </div>
+
   <!-- Authentication PIN Screen Overlay -->
   <div id="auth-overlay" class="auth-overlay">
     <div class="auth-card">
@@ -52,13 +58,12 @@
           <i data-lucide="delete"></i>
         </button>
       </div>
-
-      <p class="auth-hint">За развойна среда: PIN е 1234</p>
+      
     </div>
   </div>
 
   <script>
-    if (sessionStorage.getItem('authenticated') === 'true') {
+    if (localStorage.getItem('authenticated') === 'true') {
       document.getElementById('auth-overlay').classList.add('hidden');
     }
   </script>
@@ -201,7 +206,7 @@
               <!-- Search bar (middle, grows to fill space) -->
               <div class="search-bar">
                 <i data-lucide="search"></i>
-                <input type="text" id="search-input" placeholder="Търсене ...">
+                <input type="search" id="search-input" name="q" placeholder="Търсене ..." autocomplete="off">
                 <button id="btn-clear-search" class="btn-clear-search hidden" title="Изчисти търсенето">
                   <i data-lucide="x"></i>
                 </button>
@@ -503,7 +508,7 @@
               <!-- Search bar (middle, grows to fill space) -->
               <div class="search-bar">
                 <i data-lucide="search"></i>
-                <input type="text" id="search-input-docs" placeholder="Търсене ...">
+                <input type="search" id="search-input-docs" name="search-docs" placeholder="Търсене ..." autocomplete="off">
                 <button id="btn-clear-search-docs" class="btn-clear-search hidden" title="Изчисти търсенето">
                   <i data-lucide="x"></i>
                 </button>
@@ -665,7 +670,7 @@
               </button>
               <div class="search-bar" style="flex-grow: 1; margin-bottom: 0;">
                 <i data-lucide="search"></i>
-                <input type="text" id="search-input-staff" placeholder="Търсене на служител ...">
+                <input type="search" id="search-input-staff" name="search-staff" placeholder="Търсене на служител ..." autocomplete="off">
                 <button id="btn-clear-search-staff" class="btn-clear-search hidden" title="Изчисти търсенето">
                   <i data-lucide="x"></i>
                 </button>
