@@ -54,7 +54,6 @@ const elements = {
   // Header
   btnThemeToggle: document.getElementById('btn-theme-toggle'),
   themeIcon: document.getElementById('theme-icon'),
-  btnSettings: document.getElementById('btn-settings'),
   apiKeyBadge: document.getElementById('api-key-badge'),
   headerCompanyInput: document.getElementById('header-company-input'),
   btnSettingsGear: document.getElementById('btn-settings-gear'),
@@ -205,11 +204,9 @@ const elements = {
   btnAddExpenseAmount: document.getElementById('add-expense-amount'),
   btnSubmitAddExpense: document.getElementById('btn-submit-add-expense'),
   
-  // Settings Modal
-  modalSettings: document.getElementById('modal-settings'),
+  // Settings
   apiKeyInput: document.getElementById('api-key-input'),
-  myCompanyInput: document.getElementById('my-company-input'),
-  btnSaveKey: document.getElementById('btn-save-key'),
+  appPinInput: document.getElementById('app-pin-input'),
   
   // Lightbox Modal
   modalImage: document.getElementById('modal-image'),
@@ -262,13 +259,20 @@ const elements = {
 
 // Initialize Application
 function init() {
+  initPINAuthentication();
   applyTheme();
   updateApiKeyBadge();
   migrateOldDocuments();
   
-  // Initialize header company input
+  // Initialize settings inputs
   if (elements.headerCompanyInput) {
     elements.headerCompanyInput.value = state.myCompany;
+  }
+  if (elements.apiKeyInput) {
+    elements.apiKeyInput.value = state.apiKey;
+  }
+  if (elements.appPinInput) {
+    elements.appPinInput.value = localStorage.getItem('app_access_pin') || '1234';
   }
   
   renderDocumentList();
@@ -289,7 +293,8 @@ function init() {
   
   const activePanel = state.activePage === 'invoices' ? elements.capturePanelInvoices : (state.activePage === 'documents' ? elements.capturePanelDocs : elements.capturePanelStaff);
   const activeSrc = state.activePage === 'invoices' ? state.activeSource : (state.activePage === 'documents' ? state.activeSourceDocs : state.activeSourceStaff);
-  if (activeSrc === 'camera' && activePanel && (!activePanel.classList.contains('hidden') || isMobile)) {
+  const isAuthenticated = sessionStorage.getItem('authenticated') === 'true';
+  if (isAuthenticated && activeSrc === 'camera' && activePanel && (!activePanel.classList.contains('hidden') || isMobile)) {
     startCamera();
   } else {
     stopCamera();
@@ -652,8 +657,7 @@ function rotateImage90Degrees() {
 async function transcribeDocument() {
   const apiKey = state.apiKey.trim();
   if (!apiKey) {
-    openModal(elements.modalSettings);
-    showToast('Моля, конфигурирайте първо вашия Gemini API ключ.', 'key');
+    showSettingsPanelAndFocusKey();
     return;
   }
   
@@ -767,8 +771,7 @@ Rules:
 async function transcribeGeneralDocument() {
   const apiKey = state.apiKey.trim();
   if (!apiKey) {
-    openModal(elements.modalSettings);
-    showToast('Моля, конфигурирайте първо вашия Gemini API ключ.', 'key');
+    showSettingsPanelAndFocusKey();
     return;
   }
   
@@ -876,8 +879,7 @@ Rules:
 async function transcribeStaffDocument() {
   const apiKey = state.apiKey.trim();
   if (!apiKey) {
-    openModal(elements.modalSettings);
-    showToast('Моля, конфигурирайте първо вашия Gemini API ключ.', 'key');
+    showSettingsPanelAndFocusKey();
     return;
   }
   
@@ -1679,6 +1681,19 @@ function normalizeDate(dateStr) {
   return '';
 }
 
+// Helper to format YYYY-MM-DD date to DD/MM/YYYY for text display
+function formatDateForDisplay(dateStr) {
+  if (!dateStr) return '';
+  const normalized = normalizeDate(dateStr);
+  if (!normalized) return '';
+  const parts = normalized.split('-');
+  if (parts.length === 3) {
+    const [year, month, day] = parts;
+    return `${day}/${month}/${year}`;
+  }
+  return dateStr;
+}
+
 // ==========================================
 // Rendering List UI
 // ==========================================
@@ -1893,7 +1908,7 @@ function renderDocumentList() {
       </div>
       <div class="invoice-col date-col">
         <input type="date" class="invoice-item-input date-input" value="${dateValue}" placeholder="Дата" data-id="${doc.id}">
-        <span class="invoice-item-text date-text-only">${dateValue || '<span class="text-muted">Няма дата</span>'}</span>
+        <span class="invoice-item-text date-text-only">${formatDateForDisplay(dateValue) || '<span class="text-muted">Няма дата</span>'}</span>
       </div>
       <div class="invoice-col amount-col">
         <span class="invoice-item-text amount-text">${amountValue ? amountValue + ' €' : '<span class="text-muted">0.00 €</span>'}</span>
@@ -1980,7 +1995,119 @@ function renderDocumentList() {
   if (window.lucide) window.lucide.createIcons();
 }
 
+function renderExpiringDocuments() {
+  const panel = document.getElementById('panel-expiring-docs');
+  const listContainer = document.getElementById('expiring-docs-list');
+  const countBadge = document.getElementById('expiring-doc-count');
+  if (!panel || !listContainer) return;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const twoWeeksLimit = new Date();
+  twoWeeksLimit.setDate(today.getDate() + 14);
+  twoWeeksLimit.setHours(23, 59, 59, 999);
+
+  const expiringDocs = state.generalDocs.filter(doc => {
+    if (doc.type !== 'permit' && doc.type !== 'contract') return false;
+    const expiryDateVal = normalizeDate(doc.expiryDate);
+    if (!expiryDateVal) return false;
+    const expiry = new Date(expiryDateVal);
+    if (isNaN(expiry.getTime())) return false;
+    return expiry <= twoWeeksLimit;
+  });
+
+  // Sort: closest expiration first
+  expiringDocs.sort((a, b) => {
+    const dateA = new Date(normalizeDate(a.expiryDate));
+    const dateB = new Date(normalizeDate(b.expiryDate));
+    return dateA - dateB;
+  });
+
+  if (expiringDocs.length === 0) {
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.classList.remove('hidden');
+
+  if (countBadge) {
+    countBadge.textContent = `${expiringDocs.length} Елем.`;
+  }
+
+  listContainer.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.className = 'invoice-header';
+  header.style.borderTop = 'none';
+  header.innerHTML = `
+    <div class="invoice-col">Име на документ</div>
+    <div class="invoice-col">Тип</div>
+    <div class="invoice-col">Дата на изтичане</div>
+    <div class="invoice-col" style="text-align: right;">Действия</div>
+  `;
+  listContainer.appendChild(header);
+
+  const listWrapper = document.createElement('div');
+  listWrapper.className = 'invoice-list';
+
+  expiringDocs.forEach(doc => {
+    const item = document.createElement('div');
+    item.className = 'invoice-item';
+    item.dataset.id = doc.id;
+
+    const expiryDateVal = normalizeDate(doc.expiryDate);
+    const isImage = doc.image && doc.image.startsWith('data:image/');
+    const linkIcon = isImage ? 'image' : 'file-text';
+    const linkLabel = isImage ? 'Снимка' : 'Файл';
+    const typeLabel = doc.type === 'permit' ? 'Разрешително' : 'Договор';
+
+    // Yellow warning icon alert-triangle before name
+    item.innerHTML = `
+      <div class="invoice-col" style="display: flex; align-items: center; gap: 0.5rem;">
+        <i data-lucide="alert-triangle" style="color: #f59e0b; flex-shrink: 0; width: 16px; height: 16px;"></i>
+        <span class="invoice-item-text main-party-text" title="${escapeHTML(doc.name)}">${escapeHTML(doc.name) || `<span class="text-muted">Без име</span>`}</span>
+      </div>
+      <div class="invoice-col">
+        <span class="badge" style="font-size: 0.75rem; text-transform: uppercase; background: var(--bg-surface-hover); padding: 0.25rem 0.5rem; border-radius: 4px;">${typeLabel}</span>
+      </div>
+      <div class="invoice-col">
+        <span style="color: #ef4444; font-weight: 500;">${formatDateForDisplay(expiryDateVal)}</span>
+      </div>
+      <div class="invoice-col invoice-actions">
+        <a class="invoice-action-link btn-view-doc-file" data-id="${doc.id}">
+          <i data-lucide="${linkIcon}"></i> <span class="btn-text">${linkLabel}</span>
+        </a>
+      </div>
+    `;
+
+    item.querySelector('.btn-view-doc-file').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openFileInModal(doc.image, doc.name);
+    });
+
+    item.addEventListener('click', (e) => {
+      if (!e.target.closest('.invoice-action-link')) {
+        openGeneralDocDetailsModal(doc);
+      }
+    });
+
+    listWrapper.appendChild(item);
+  });
+
+  listContainer.appendChild(listWrapper);
+
+  if (window.lucide) {
+    window.lucide.createIcons({
+      attrs: {
+        class: 'lucide'
+      },
+      nameAttr: 'data-lucide'
+    });
+  }
+}
+
 function renderGeneralDocumentList() {
+  renderExpiringDocuments();
+  
   const filter = elements.searchInputDocs.value.toLowerCase().trim();
   const startDate = elements.filterStartDateDocs ? elements.filterStartDateDocs.value : '';
   const endDate = elements.filterEndDateDocs ? elements.filterEndDateDocs.value : '';
@@ -2272,7 +2399,7 @@ function renderStaffList() {
   });
   
   if (elements.docCountStaff) {
-    elements.docCountStaff.textContent = `${filteredStaff.length} Служители / People`;
+    elements.docCountStaff.textContent = `${filteredStaff.length} Служители`;
   }
   
   if (state.staff.length === 0 && state.unattachedStaffDocs.length === 0) {
@@ -2336,7 +2463,7 @@ function renderStaffList() {
           <div class="staff-table-col font-semibold text-primary" title="${escapeHTML(doc.name)}">
             <i data-lucide="file-text" class="text-muted" style="display:inline-block; vertical-align:middle; margin-right:4px;"></i>
             ${escapeHTML(doc.name)}
-            <div style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal; margin-left: 20px;">Качен на: ${doc.uploadDate}</div>
+            <div style="font-size: 0.75rem; color: var(--text-muted); font-weight: normal; margin-left: 20px;">Качен на: ${formatDateForDisplay(doc.uploadDate)}</div>
           </div>
           <div class="staff-table-col text-secondary" title="${escapeHTML(extName)}">
             ${escapeHTML(extName)}
@@ -2465,7 +2592,6 @@ function renderStaffList() {
     pastHeader.innerHTML = `
       <div class="staff-header-col">Име</div>
       <div class="staff-header-col">Длъжност</div>
-      <div class="staff-header-col">Назначен на</div>
       <div class="staff-header-col">Освободен на</div>
       <div class="staff-header-col" style="text-align: right;">Действия</div>
     `;
@@ -2476,7 +2602,6 @@ function renderStaffList() {
       item.className = 'staff-table-item past-staff-item';
       item.dataset.id = person.id;
       
-      const hiringDateVal = normalizeDate(person.hiringDate);
       const archiveDateVal = normalizeDate(person.archiveDate) || new Date().toISOString().slice(0, 10);
       const positionVal = person.position || 'Неизвестна';
       const docCount = person.documents ? person.documents.length : 0;
@@ -2488,9 +2613,6 @@ function renderStaffList() {
           </div>
           <div class="staff-table-col text-muted" style="overflow: visible;">
             <input type="text" class="invoice-item-input staff-inline-position-input text-muted" value="${escapeHTML(person.position || '')}" placeholder="Неизвестна" data-id="${person.id}" title="${escapeHTML(person.position || 'Неизвестна')}" style="width: 100%; padding: 0.2rem 0.4rem;">
-          </div>
-          <div class="staff-table-col">
-            <input type="date" class="staff-inline-date-input date-hiring" value="${hiringDateVal}" data-id="${person.id}">
           </div>
           <div class="staff-table-col">
             <input type="date" class="staff-inline-date-input date-archive" value="${archiveDateVal}" data-id="${person.id}">
@@ -2739,10 +2861,8 @@ function renderStaffGeneralDocsList() {
             ${activeStaffOptions}
           </optgroup>
           <optgroup label="Друга категория">
-            <option value="cat_permit">Разрешителни</option>
-            <option value="cat_contract">Договори</option>
-            <option value="cat_trade">Търговски документи</option>
-            <option value="cat_statement">Извлечения</option>
+            <option value="cat_payroll">Ведомости</option>
+            <option value="cat_schedule">Графици</option>
             <option value="cat_other">Други</option>
           </optgroup>
         </select>
@@ -2865,37 +2985,19 @@ function moveStaffGeneralDoc(docId, targetOption) {
     renderStaffList();
     showToast(`Документът е преместен в досието на ${employee.name}.`, 'check-circle');
   }
-  // 2. Move to general documents (View 2) categories
+  // 2. Move to other category within the current general staff documents panel
   else if (targetOption.startsWith('cat_')) {
     const category = targetOption.replace('cat_', '');
     
-    // Construct general documents entry
-    const newDoc = {
-      id: 'gdoc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
-      name: doc.name,
-      type: category, // 'permit', 'contract', 'trade', 'statement', 'other'
-      image: doc.image,
-      issueDate: doc.date || new Date().toISOString().slice(0, 10),
-      expiryDate: null,
-      supplier: null,
-      products: [],
-      text: '',
-      timestamp: Date.now()
-    };
+    // Update the category (type) of the document
+    doc.type = category; // 'payroll', 'schedule', or 'other'
 
-    state.generalDocs.unshift(newDoc);
-
-    // Remove from staff general documents
-    state.staffGeneralDocs.splice(docIndex, 1);
-
-    // Save states
-    localStorage.setItem('saved_general_documents', JSON.stringify(state.generalDocs));
+    // Save state
     localStorage.setItem('saved_staff_general_documents', JSON.stringify(state.staffGeneralDocs));
 
     // Refresh views
     renderStaffGeneralDocsList();
-    renderGeneralDocumentList();
-    showToast('Документът е преместен в секция Документи.', 'check-circle');
+    showToast('Документът е преместен.', 'check-circle');
   }
 }
 
@@ -2920,7 +3022,7 @@ function renderStaffPersonDocs(person, docsList) {
         <i data-lucide="file-text" class="sub-doc-icon"></i>
         <input type="text" class="staff-doc-name-input" value="${escapeHTML(doc.name)}" title="Преименувай документа" data-doc-id="${doc.id}" data-person-id="${person.id}">
       </div>
-      <div class="staff-doc-meta">Качен на: ${uploadDateFormatted}</div>
+      <div class="staff-doc-meta">Качен на: ${formatDateForDisplay(uploadDateFormatted)}</div>
       <div class="staff-doc-actions">
         <button class="btn btn-xs btn-secondary btn-view-staff-doc-details" data-doc-id="${doc.id}" data-person-id="${person.id}" title="Детайли">
           <i data-lucide="file-text"></i> Детайли
@@ -3517,6 +3619,17 @@ function updateApiKeyBadge() {
   if (window.lucide) window.lucide.createIcons();
 }
 
+function showSettingsPanelAndFocusKey() {
+  if (elements.backupPanel) {
+    elements.backupPanel.classList.remove('hidden');
+  }
+  if (elements.apiKeyInput) {
+    elements.apiKeyInput.focus();
+    elements.apiKeyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  showToast('Моля, конфигурирайте първо вашия Gemini API ключ.', 'key');
+}
+
 // Expand/Collapse Capture Panels Helpers
 function expandCapturePanel(page) {
   if (page === 'invoices') {
@@ -3687,21 +3800,55 @@ function setupEventListeners() {
     });
   }
 
-  // Settings Button
-  elements.btnSettings.addEventListener('click', () => {
-    elements.apiKeyInput.value = state.apiKey;
-    elements.myCompanyInput.value = state.myCompany;
-    openModal(elements.modalSettings);
-  });
+  // Real-time API Key Sync
+  if (elements.apiKeyInput) {
+    elements.apiKeyInput.addEventListener('input', (e) => {
+      const key = e.target.value.trim();
+      state.apiKey = key;
+      localStorage.setItem('gemini_api_key', key);
+      updateApiKeyBadge();
+    });
+  }
+
+  // Real-time Access PIN Sync & Validation
+  if (elements.appPinInput) {
+    elements.appPinInput.addEventListener('change', (e) => {
+      const pin = e.target.value.trim();
+      if (!/^\d{4,10}$/.test(pin)) {
+        showToast('PIN кодът трябва да бъде между 4 и 10 цифри!', 'alert-triangle');
+        elements.appPinInput.value = localStorage.getItem('app_access_pin') || '1234';
+        return;
+      }
+      localStorage.setItem('app_access_pin', pin);
+      showToast('PIN кодът е променен.', 'check-circle');
+      
+      const authHint = document.querySelector('.auth-hint');
+      if (authHint) {
+        authHint.textContent = `За развойна среда: PIN е ${pin}`;
+      }
+      
+      const dotsContainer = document.querySelector('.pin-dots');
+      if (dotsContainer) {
+        dotsContainer.innerHTML = '';
+        for (let i = 0; i < pin.length; i++) {
+          const span = document.createElement('span');
+          span.classList.add('pin-dot');
+          dotsContainer.appendChild(span);
+        }
+      }
+      
+      initPINAuthentication();
+    });
+  }
 
   // Header Company Input - real-time sync
-  elements.headerCompanyInput.addEventListener('input', (e) => {
-    state.myCompany = e.target.value.trim();
-    localStorage.setItem('my_company_name', state.myCompany);
-    // Keep settings modal input in sync
-    elements.myCompanyInput.value = state.myCompany;
-    renderDocumentList();
-  });
+  if (elements.headerCompanyInput) {
+    elements.headerCompanyInput.addEventListener('input', (e) => {
+      state.myCompany = e.target.value.trim();
+      localStorage.setItem('my_company_name', state.myCompany);
+      renderDocumentList();
+    });
+  }
 
   // Theme Toggle Button
   elements.btnThemeToggle.addEventListener('click', () => {
@@ -3709,24 +3856,6 @@ function setupEventListeners() {
     localStorage.setItem('theme', state.theme);
     applyTheme();
     showToast(`Превключено на ${state.theme === 'light' ? 'светла' : 'тъмна'} тема.`, 'sun');
-  });
-  
-  // Save API Key and Company Name
-  elements.btnSaveKey.addEventListener('click', () => {
-    const key = elements.apiKeyInput.value.trim();
-    state.apiKey = key;
-    localStorage.setItem('gemini_api_key', key);
-    
-    const myCompany = elements.myCompanyInput.value.trim();
-    state.myCompany = myCompany;
-    localStorage.setItem('my_company_name', myCompany);
-    // Sync header input
-    elements.headerCompanyInput.value = myCompany;
-    
-    updateApiKeyBadge();
-    closeModal(elements.modalSettings);
-    renderDocumentList();
-    showToast('Конфигурацията е запазена.', 'check');
   });
 
   // Category dropdown in details modal
@@ -4171,7 +4300,6 @@ function setupEventListeners() {
     if (e.key === 'Escape') {
       const isLightboxOpen = !elements.modalImage.classList.contains('hidden');
       const isDetailsOpen = !elements.modalView.classList.contains('hidden');
-      const isSettingsOpen = !elements.modalSettings.classList.contains('hidden');
       const isDocDetailsOpen = !elements.modalDocDetails.classList.contains('hidden');
       const isStaffDocDetailsOpen = !elements.modalStaffDocDetails.classList.contains('hidden');
       
@@ -4179,8 +4307,6 @@ function setupEventListeners() {
         closeModal(elements.modalImage);
       } else if (isDetailsOpen) {
         closeModal(elements.modalView);
-      } else if (isSettingsOpen) {
-        closeModal(elements.modalSettings);
       } else if (isDocDetailsOpen) {
         closeModal(elements.modalDocDetails);
       } else if (isStaffDocDetailsOpen) {
@@ -5181,8 +5307,7 @@ async function convertFileToPdf(file) {
 async function processMultipleFiles(files, viewType) {
   const apiKey = state.apiKey.trim();
   if (!apiKey) {
-    openModal(elements.modalSettings);
-    showToast('Моля, конфигурирайте първо вашия Gemini API ключ.', 'key');
+    showSettingsPanelAndFocusKey();
     return;
   }
 
@@ -5631,6 +5756,119 @@ function updateMonthlyExpenseTotal() {
   });
   
   elements.monthlyExpenseValue.textContent = `${monthlyTotal.toFixed(2)} €`;
+}
+
+// PIN Authentication Logic
+function initPINAuthentication() {
+  const overlay = document.getElementById('auth-overlay');
+  if (!overlay) return;
+  
+  // If already authenticated, do nothing
+  if (sessionStorage.getItem('authenticated') === 'true') {
+    overlay.classList.add('hidden');
+    return;
+  }
+  
+  const correctPIN = localStorage.getItem('app_access_pin') || '1234';
+  const targetLength = correctPIN.length;
+
+  const authHint = overlay.querySelector('.auth-hint');
+  if (authHint) {
+    authHint.textContent = `За развойна среда: PIN е ${correctPIN}`;
+  }
+  
+  // Dynamically generate the dot spans based on the PIN length
+  const dotsContainer = overlay.querySelector('.pin-dots');
+  if (dotsContainer) {
+    dotsContainer.innerHTML = '';
+    for (let i = 0; i < targetLength; i++) {
+      const span = document.createElement('span');
+      span.classList.add('pin-dot');
+      dotsContainer.appendChild(span);
+    }
+  }
+
+  let enteredPIN = '';
+  
+  const dots = overlay.querySelectorAll('.pin-dot');
+  const keys = overlay.querySelectorAll('.pin-key');
+  const card = overlay.querySelector('.auth-card');
+  
+  function updateDots() {
+    dots.forEach((dot, index) => {
+      if (index < enteredPIN.length) {
+        dot.classList.add('active');
+      } else {
+        dot.classList.remove('active');
+      }
+    });
+  }
+  
+  function handleKeyPress(val) {
+    if (card.classList.contains('shake')) return;
+    
+    if (val === 'clear') {
+      enteredPIN = '';
+    } else if (val === 'delete') {
+      enteredPIN = enteredPIN.slice(0, -1);
+    } else {
+      if (enteredPIN.length < targetLength) {
+        enteredPIN += val;
+      }
+    }
+    
+    updateDots();
+    
+    // Check PIN when target length is reached
+    if (enteredPIN.length === targetLength) {
+      if (enteredPIN === correctPIN) {
+        // Authenticated!
+        sessionStorage.setItem('authenticated', 'true');
+        overlay.classList.add('hidden');
+        showToast('Успешен достъп!', 'check-circle');
+        
+        // Start camera if needed
+        const isMobile = window.innerWidth < 768;
+        const activePanel = state.activePage === 'invoices' ? elements.capturePanelInvoices : (state.activePage === 'documents' ? elements.capturePanelDocs : elements.capturePanelStaff);
+        const activeSrc = state.activePage === 'invoices' ? state.activeSource : (state.activePage === 'documents' ? state.activeSourceDocs : state.activeSourceStaff);
+        if (activeSrc === 'camera' && activePanel && (!activePanel.classList.contains('hidden') || isMobile)) {
+          startCamera();
+        }
+      } else {
+        // Wrong PIN: trigger shake animation and reset
+        card.classList.add('shake');
+        showToast('Грешен PIN код!', 'alert-triangle');
+        setTimeout(() => {
+          card.classList.remove('shake');
+          enteredPIN = '';
+          updateDots();
+        }, 600);
+      }
+    }
+  }
+  
+  keys.forEach(key => {
+    key.addEventListener('click', () => {
+      const val = key.dataset.val;
+      handleKeyPress(val);
+    });
+  });
+  
+  // Also support physical keyboard inputs
+  document.addEventListener('keydown', (e) => {
+    // If overlay is hidden, don't capture key presses
+    if (overlay.classList.contains('hidden') || sessionStorage.getItem('authenticated') === 'true') {
+      return;
+    }
+    
+    if (e.key >= '0' && e.key <= '9') {
+      handleKeyPress(e.key);
+    } else if (e.key === 'Backspace') {
+      handleKeyPress('delete');
+    } else if (e.key === 'Escape' || e.key === 'c' || e.key === 'C') {
+      handleKeyPress('clear');
+    }
+  });
 }
 
 // Boot application

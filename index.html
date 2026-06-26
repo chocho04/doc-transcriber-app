@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DocuScribe AI - Document Transcriber</title>
+  <title>Doc Manager - Document Transcriber</title>
   <!-- Google Fonts: Outfit & JetBrains Mono -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -20,6 +20,49 @@
 </head>
 
 <body>
+  <!-- Authentication PIN Screen Overlay -->
+  <div id="auth-overlay" class="auth-overlay">
+    <div class="auth-card">
+      <div class="auth-logo">
+        <i data-lucide="wand-2" class="auth-logo-icon"></i>
+        <h2>Doc Manager</h2>
+      </div>
+      <p class="auth-subtitle">Въведете PIN код за достъп</p>
+
+      <div class="pin-dots">
+        <span class="pin-dot"></span>
+        <span class="pin-dot"></span>
+        <span class="pin-dot"></span>
+        <span class="pin-dot"></span>
+      </div>
+
+      <div class="pin-keypad">
+        <button type="button" class="pin-key" data-val="1">1</button>
+        <button type="button" class="pin-key" data-val="2">2</button>
+        <button type="button" class="pin-key" data-val="3">3</button>
+        <button type="button" class="pin-key" data-val="4">4</button>
+        <button type="button" class="pin-key" data-val="5">5</button>
+        <button type="button" class="pin-key" data-val="6">6</button>
+        <button type="button" class="pin-key" data-val="7">7</button>
+        <button type="button" class="pin-key" data-val="8">8</button>
+        <button type="button" class="pin-key" data-val="9">9</button>
+        <button type="button" class="pin-key text-btn" data-val="clear">C</button>
+        <button type="button" class="pin-key" data-val="0">0</button>
+        <button type="button" class="pin-key text-btn" data-val="delete">
+          <i data-lucide="delete"></i>
+        </button>
+      </div>
+
+      <p class="auth-hint">За развойна среда: PIN е 1234</p>
+    </div>
+  </div>
+
+  <script>
+    if (sessionStorage.getItem('authenticated') === 'true') {
+      document.getElementById('auth-overlay').classList.add('hidden');
+    }
+  </script>
+
   <div class="app-wrapper">
     <!-- Header -->
     <header class="app-header">
@@ -273,20 +316,24 @@
                 <i data-lucide="settings" class="text-accent"></i>
                 <h3>Настройки / Settings</h3>
               </div>
-              <div class="footer-settings-controls footer-settings-controls-row">
+              <div class="footer-settings-controls footer-settings-controls-row" style="flex-wrap: wrap;">
                 <div class="footer-company-group">
                   <label for="header-company-input">Моята Фирма / My Company</label>
                   <input type="text" id="header-company-input" class="header-company-input"
                     placeholder="Въведете име на фирма...">
                 </div>
-                <div class="footer-settings-actions">
-                  <button id="btn-settings" class="btn btn-secondary icon-btn" title="Configure API Key">
-                    <i data-lucide="key"></i>
-                    <span>API Configuration</span>
-                  </button>
-                  <span id="api-key-badge" class="badge badge-error">
-                    <i data-lucide="circle-x"></i>
-                  </span>
+                <div class="footer-company-group">
+                  <label for="api-key-input">Gemini API Key</label>
+                  <div style="display: flex; gap: 0.5rem; align-items: center; width: 100%;">
+                    <input type="password" id="api-key-input" class="header-company-input" placeholder="AIzaSy...">
+                    <span id="api-key-badge" class="badge badge-error" style="height: 38px; width: 38px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); flex-shrink: 0; padding: 0;">
+                      <i data-lucide="circle-x" style="margin: 0; width: 18px; height: 18px;"></i>
+                    </span>
+                  </div>
+                </div>
+                <div class="footer-company-group">
+                  <label for="app-pin-input">PIN код за достъп / Access PIN</label>
+                  <input type="password" maxlength="10" pattern="[0-9]{4,10}" id="app-pin-input" class="header-company-input" placeholder="1234">
                 </div>
               </div>
             </div>
@@ -398,6 +445,22 @@
                   <span>Анализирай</span>
                 </button>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Panel: Expiring Documents -->
+        <section class="panel list-panel hidden" id="panel-expiring-docs" style="margin-bottom: 1.5rem;">
+          <div class="panel-header" style="background: rgb(245 158 11 / 8%); border-bottom: 1px solid rgb(245 158 11 / 15%);">
+            <i data-lucide="alert-triangle" style="color: #f59e0b;"></i>
+            <h2 style="color: #f59e0b; display: flex; align-items: center; gap: 0.5rem; margin: 0;">
+              <span>Изтичащи документи</span>
+            </h2>
+            <span id="expiring-doc-count" class="badge" style="background: #f59e0b; color: #111827; font-weight: 600;">0 Елем.</span>
+          </div>
+          <div class="panel-body list-body" style="padding: 0;">
+            <div id="expiring-docs-list" style="margin: 0;">
+              <!-- Dynamically populated expiring docs list -->
             </div>
           </div>
         </section>
@@ -577,10 +640,10 @@
           <div class="panel-header">
             <i data-lucide="users"></i>
             <h2>
-              <span class="desktop-text">Personnel Directory</span>
-              <span class="mobile-text">Personnel</span>
+              <span class="desktop-text">Персонал</span>
+              <span class="mobile-text">Персонал</span>
             </h2>
-            <span id="doc-count-staff" class="badge badge-info">0 People</span>
+            <span id="doc-count-staff" class="badge badge-info">0 Служители</span>
           </div>
 
           <div class="panel-body list-body">
@@ -667,50 +730,7 @@
     </main>
   </div>
 
-  <!-- Settings / API Key Modal -->
-  <div id="modal-settings" class="modal-backdrop hidden">
-    <div class="modal-content glassmorphism">
-      <div class="modal-header">
-        <div class="modal-title-group">
-          <i data-lucide="key" class="text-accent"></i>
-          <h3>Gemini API Configuration</h3>
-        </div>
-        <button class="modal-close" data-close="modal-settings">&times;</button>
-      </div>
-      <div class="modal-body">
-        <p class="modal-desc">
-          To transcribe documents, this app uses Google's Gemini API directly from your browser. Your key is stored
-          locally in your browser and is never uploaded anywhere else.
-        </p>
-        <div class="input-group">
-          <label for="api-key-input">Gemini API Key</label>
-          <div class="input-wrapper">
-            <i data-lucide="lock"></i>
-            <input type="password" id="api-key-input" placeholder="AIzaSy...">
-          </div>
-          <p class="input-hint">
-            Don't have a key? You can get a free one from the <a href="https://aistudio.google.com/" target="_blank"
-              rel="noopener">Google AI Studio</a>.
-          </p>
-        </div>
-        <div class="input-group" style="margin-top: 1.25rem;">
-          <label for="my-company-input">Име на моята фирма / My Company Name</label>
-          <div class="input-wrapper">
-            <i data-lucide="building"></i>
-            <input type="text" id="my-company-input" placeholder="e.g., MyCompany Ltd.">
-          </div>
-          <p class="input-hint">
-            Въведете името на вашата фирма. Фактурите, в които вие сте "Доставчик", автоматично ще се сортират в таб
-            "Приходни Фактури".
-          </p>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button id="btn-save-key" class="btn btn-primary">Save Configuration</button>
-        <button class="btn btn-secondary" data-close="modal-settings">Cancel</button>
-      </div>
-    </div>
-  </div>
+
 
   <!-- Image Lightbox Modal -->
   <div id="modal-image" class="modal-backdrop hidden lightbox-backdrop">
