@@ -1,6 +1,7 @@
 // State Management
 let state = {
   apiKey: localStorage.getItem('gemini_api_key') || '',
+  cloudConvertApiKey: localStorage.getItem('cloudconvert_api_key') || '',
   documents: JSON.parse(localStorage.getItem('saved_documents')) || [],
   generalDocs: JSON.parse(localStorage.getItem('saved_general_documents')) || [],
   staff: JSON.parse(localStorage.getItem('saved_staff')) || [],
@@ -206,6 +207,8 @@ const elements = {
   
   // Settings
   apiKeyInput: document.getElementById('api-key-input'),
+  cloudConvertApiKeyInput: document.getElementById('cloudconvert-api-key-input'),
+  cloudConvertApiKeyBadge: document.getElementById('cloudconvert-api-key-badge'),
   appPinInput: document.getElementById('app-pin-input'),
   
   // Lightbox Modal
@@ -262,6 +265,7 @@ function init() {
   initPINAuthentication();
   applyTheme();
   updateApiKeyBadge();
+  updateCloudConvertApiKeyBadge();
   migrateOldDocuments();
   
   // Initialize settings inputs
@@ -270,6 +274,9 @@ function init() {
   }
   if (elements.apiKeyInput) {
     elements.apiKeyInput.value = state.apiKey;
+  }
+  if (elements.cloudConvertApiKeyInput) {
+    elements.cloudConvertApiKeyInput.value = state.cloudConvertApiKey;
   }
   if (elements.appPinInput) {
     elements.appPinInput.value = localStorage.getItem('app_access_pin') || '1234';
@@ -1062,9 +1069,7 @@ function rotateImage90DegreesStaff() {
 }
 
 function handleFileDocs(file) {
-  const isRtf = file.name.toLowerCase().endsWith('.rtf');
-  const isDoc = file.name.toLowerCase().endsWith('.doc');
-  if (isRtf || isDoc) {
+  if (shouldConvertToPdf(file)) {
     elements.imagePreviewDocs.src = '';
     elements.imagePreviewDocs.classList.add('hidden');
     elements.btnRotatePreviewDocs.classList.add('hidden');
@@ -1100,7 +1105,7 @@ function handleFileDocs(file) {
         handleFileDocs(pdfFile);
       })
       .catch(err => {
-        const formatName = isRtf ? 'RTF' : 'DOC';
+        const formatName = file.name.substring(file.name.lastIndexOf('.')).toUpperCase().substring(1);
         showToast(`Грешка при конвертиране на ${formatName}: ${err.message}`, 'alert-circle');
         resetPreviewDocs();
       });
@@ -1193,9 +1198,7 @@ function handleFileDocs(file) {
 }
 
 function handleFileStaff(file) {
-  const isRtf = file.name.toLowerCase().endsWith('.rtf');
-  const isDoc = file.name.toLowerCase().endsWith('.doc');
-  if (isRtf || isDoc) {
+  if (shouldConvertToPdf(file)) {
     elements.imagePreviewStaff.src = '';
     elements.imagePreviewStaff.classList.add('hidden');
     elements.btnRotatePreviewStaff.classList.add('hidden');
@@ -1231,7 +1234,7 @@ function handleFileStaff(file) {
         handleFileStaff(pdfFile);
       })
       .catch(err => {
-        const formatName = isRtf ? 'RTF' : 'DOC';
+        const formatName = file.name.substring(file.name.lastIndexOf('.')).toUpperCase().substring(1);
         showToast(`Грешка при конвертиране на ${formatName}: ${err.message}`, 'alert-circle');
         resetPreviewStaff();
       });
@@ -3485,6 +3488,58 @@ function renderModalProductsTable(doc) {
   if (window.lucide) window.lucide.createIcons();
 }
 
+// API Key Updates
+function updateApiKeyBadge() {
+  const isKeyConfigured = state.apiKey && state.apiKey.length > 10;
+  
+  if (isKeyConfigured) {
+    elements.apiKeyBadge.className = 'badge badge-success';
+    elements.apiKeyBadge.innerHTML = `<i data-lucide="check-circle-2"></i>`;
+  } else {
+    elements.apiKeyBadge.className = 'badge badge-error';
+    elements.apiKeyBadge.innerHTML = `<i data-lucide="circle-x"></i>`;
+  }
+  
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function updateCloudConvertApiKeyBadge() {
+  const isKeyConfigured = state.cloudConvertApiKey && state.cloudConvertApiKey.length > 10;
+  
+  if (elements.cloudConvertApiKeyBadge) {
+    if (isKeyConfigured) {
+      elements.cloudConvertApiKeyBadge.className = 'badge badge-success';
+      elements.cloudConvertApiKeyBadge.innerHTML = `<i data-lucide="check-circle-2"></i>`;
+    } else {
+      elements.cloudConvertApiKeyBadge.className = 'badge badge-error';
+      elements.cloudConvertApiKeyBadge.innerHTML = `<i data-lucide="circle-x"></i>`;
+    }
+  }
+  
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function showSettingsPanelAndFocusKey() {
+  if (elements.backupPanel) {
+    elements.backupPanel.classList.remove('hidden');
+  }
+  if (elements.apiKeyInput) {
+    elements.apiKeyInput.focus();
+    elements.apiKeyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  showToast('Моля, конфигурирайте първо вашия Gemini API ключ.', 'key');
+}
+
+function showSettingsPanelAndFocusCloudConvertKey() {
+  if (elements.backupPanel) {
+    elements.backupPanel.classList.remove('hidden');
+  }
+  if (elements.cloudConvertApiKeyInput) {
+    elements.cloudConvertApiKeyInput.focus();
+    elements.cloudConvertApiKeyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
 let lightboxScale = 1;
 let panX = 0;
 let panY = 0;
@@ -3604,31 +3659,7 @@ function openFileInModal(base64DataUrl, fileName) {
   if (window.lucide) window.lucide.createIcons();
 }
 
-// API Key Updates
-function updateApiKeyBadge() {
-  const isKeyConfigured = state.apiKey && state.apiKey.length > 10;
-  
-  if (isKeyConfigured) {
-    elements.apiKeyBadge.className = 'badge badge-success';
-    elements.apiKeyBadge.innerHTML = `<i data-lucide="check-circle-2"></i>`;
-  } else {
-    elements.apiKeyBadge.className = 'badge badge-error';
-    elements.apiKeyBadge.innerHTML = `<i data-lucide="circle-x"></i>`;
-  }
-  
-  if (window.lucide) window.lucide.createIcons();
-}
 
-function showSettingsPanelAndFocusKey() {
-  if (elements.backupPanel) {
-    elements.backupPanel.classList.remove('hidden');
-  }
-  if (elements.apiKeyInput) {
-    elements.apiKeyInput.focus();
-    elements.apiKeyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
-  showToast('Моля, конфигурирайте първо вашия Gemini API ключ.', 'key');
-}
 
 // Expand/Collapse Capture Panels Helpers
 function expandCapturePanel(page) {
@@ -3810,6 +3841,16 @@ function setupEventListeners() {
     });
   }
 
+  // Real-time CloudConvert API Key Sync
+  if (elements.cloudConvertApiKeyInput) {
+    elements.cloudConvertApiKeyInput.addEventListener('input', (e) => {
+      const key = e.target.value.trim();
+      state.cloudConvertApiKey = key;
+      localStorage.setItem('cloudconvert_api_key', key);
+      updateCloudConvertApiKeyBadge();
+    });
+  }
+
   // Real-time Access PIN Sync & Validation
   if (elements.appPinInput) {
     elements.appPinInput.addEventListener('change', (e) => {
@@ -3938,6 +3979,38 @@ function setupEventListeners() {
       const file = e.target.files[0];
       if (file) {
         handleFile(file);
+      }
+    });
+  }
+
+  const btnMobileCameraDocs = document.getElementById('btn-mobile-camera-docs');
+  const mobileCameraInputDocs = document.getElementById('mobile-camera-input-docs');
+  
+  if (btnMobileCameraDocs && mobileCameraInputDocs) {
+    btnMobileCameraDocs.addEventListener('click', () => {
+      mobileCameraInputDocs.click();
+    });
+    
+    mobileCameraInputDocs.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        handleFileDocs(file);
+      }
+    });
+  }
+
+  const btnMobileCameraStaff = document.getElementById('btn-mobile-camera-staff');
+  const mobileCameraInputStaff = document.getElementById('mobile-camera-input-staff');
+  
+  if (btnMobileCameraStaff && mobileCameraInputStaff) {
+    btnMobileCameraStaff.addEventListener('click', () => {
+      mobileCameraInputStaff.click();
+    });
+    
+    mobileCameraInputStaff.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        handleFileStaff(file);
       }
     });
   }
@@ -5245,14 +5318,26 @@ function readFileAsDataURL(file) {
  * @param {File} file - The File object (.rtf or .doc).
  * @returns {Promise<File>} - Resolves with the converted PDF File object.
  */
+function shouldConvertToPdf(file) {
+  if (!file || !file.name) return false;
+  const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+  const convertFormats = ['.rtf', '.doc', '.xls', '.ppt', '.pptx', '.odt', '.ods', '.odp'];
+  return convertFormats.includes(ext);
+}
+
 async function convertFileToPdf(file) {
+  const apiKey = (state.cloudConvertApiKey || '').trim();
+  if (!apiKey) {
+    showSettingsPanelAndFocusCloudConvertKey();
+    showToast('Моля, конфигурирайте първо вашия CloudConvert API ключ.', 'key');
+    throw new Error('CloudConvert API key is not configured.');
+  }
+
   const base64Data = await readFileAsDataURL(file);
-  const isDoc = file.name.toLowerCase().endsWith('.doc');
-  const route = isDoc ? '/api/convert-doc' : '/api/convert-rtf';
   
   const apiEndpoint = window.location.protocol === 'file:'
-    ? `http://127.0.0.1:8080${route}`
-    : route;
+    ? `http://127.0.0.1:8080/api/convert-to-pdf`
+    : '/api/convert-to-pdf';
     
   const response = await fetch(apiEndpoint, {
     method: 'POST',
@@ -5261,7 +5346,8 @@ async function convertFileToPdf(file) {
     },
     body: JSON.stringify({
       filename: file.name,
-      base64Data: base64Data
+      base64Data: base64Data,
+      cloudConvertApiKey: apiKey
     })
   });
   
@@ -5360,9 +5446,7 @@ async function processMultipleFiles(files, viewType) {
 
     try {
       let fileToProcess = file;
-      const isRtf = file.name.toLowerCase().endsWith('.rtf');
-      const isDoc = file.name.toLowerCase().endsWith('.doc');
-      if (isRtf || isDoc) {
+      if (shouldConvertToPdf(file)) {
         btnElement.innerHTML = `<i data-lucide="loader-2" class="animate-spin"></i> <span>Конвертиране ${fileNum}/${total}: ${escapeHTML(file.name.length > 15 ? file.name.substring(0, 12) + '...' : file.name)}</span>`;
         if (window.lucide) window.lucide.createIcons();
         fileToProcess = await convertFileToPdf(file);
@@ -5413,9 +5497,7 @@ async function processMultipleFiles(files, viewType) {
 
 // File Reader Helper
 function handleFile(file) {
-  const isRtf = file.name.toLowerCase().endsWith('.rtf');
-  const isDoc = file.name.toLowerCase().endsWith('.doc');
-  if (isRtf || isDoc) {
+  if (shouldConvertToPdf(file)) {
     elements.imagePreview.src = '';
     elements.imagePreview.classList.add('hidden');
     elements.btnRotatePreview.classList.add('hidden');
@@ -5451,7 +5533,7 @@ function handleFile(file) {
         handleFile(pdfFile);
       })
       .catch(err => {
-        const formatName = isRtf ? 'RTF' : 'DOC';
+        const formatName = file.name.substring(file.name.lastIndexOf('.')).toUpperCase().substring(1);
         showToast(`Грешка при конвертиране на ${formatName}: ${err.message}`, 'alert-circle');
         resetPreview();
       });
@@ -5599,6 +5681,7 @@ function backupDataZip() {
       saved_staff: state.staff,
       saved_staff_general_documents: state.staffGeneralDocs,
       gemini_api_key: state.apiKey,
+      cloudconvert_api_key: state.cloudConvertApiKey,
       theme: state.theme,
       my_company_name: state.myCompany
     };
@@ -5671,6 +5754,9 @@ function handleRestoreFile(file) {
               if (data.gemini_api_key !== undefined) {
                 localStorage.setItem('gemini_api_key', data.gemini_api_key);
               }
+              if (data.cloudconvert_api_key !== undefined) {
+                localStorage.setItem('cloudconvert_api_key', data.cloudconvert_api_key);
+              }
               if (data.theme !== undefined) {
                 localStorage.setItem('theme', data.theme);
               }
@@ -5684,12 +5770,17 @@ function handleRestoreFile(file) {
               state.staff = restoredStaff;
               state.staffGeneralDocs = restoredStaffGeneralDocs;
               state.apiKey = data.gemini_api_key || '';
+              state.cloudConvertApiKey = data.cloudconvert_api_key || '';
               state.theme = data.theme || 'dark';
               state.myCompany = data.my_company_name || '';
               
               // Apply changes
               applyTheme();
               updateApiKeyBadge();
+              updateCloudConvertApiKeyBadge();
+              if (elements.cloudConvertApiKeyInput) {
+                elements.cloudConvertApiKeyInput.value = state.cloudConvertApiKey;
+              }
               elements.headerCompanyInput.value = state.myCompany;
               migrateOldDocuments();
               renderDocumentList();

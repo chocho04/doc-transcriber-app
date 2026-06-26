@@ -124,7 +124,7 @@
                 <div id="dropzone" class="dropzone">
                   <i data-lucide="file-up" class="dropzone-icon"></i>
                   <p class="dropzone-text">Постави файловете тук или <span>избери</span></p>
-                  <input type="file" id="file-input" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.rtf"
+                  <input type="file" id="file-input" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.rtf,.ppt,.pptx,.odt,.ods,.odp"
                     class="file-input-hidden" multiple>
                 </div>
               </div>
@@ -332,6 +332,15 @@
                   </div>
                 </div>
                 <div class="footer-company-group">
+                  <label for="cloudconvert-api-key-input">CloudConvert API Key</label>
+                  <div style="display: flex; gap: 0.5rem; align-items: center; width: 100%;">
+                    <input type="password" id="cloudconvert-api-key-input" class="header-company-input" placeholder="Копирайте sk-...">
+                    <span id="cloudconvert-api-key-badge" class="badge badge-error" style="height: 38px; width: 38px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); flex-shrink: 0; padding: 0;">
+                      <i data-lucide="circle-x" style="margin: 0; width: 18px; height: 18px;"></i>
+                    </span>
+                  </div>
+                </div>
+                <div class="footer-company-group">
                   <label for="app-pin-input">PIN код за достъп / Access PIN</label>
                   <input type="password" maxlength="10" pattern="[0-9]{4,10}" id="app-pin-input" class="header-company-input" placeholder="1234">
                 </div>
@@ -401,7 +410,7 @@
                   <p class="dropzone-text">Постави файловете тук или <span>избери</span>
                   </p>
                   <input type="file" id="file-input-docs"
-                    accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.rtf" class="file-input-hidden" multiple>
+                    accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.rtf,.ppt,.pptx,.odt,.ods,.odp" class="file-input-hidden" multiple>
                 </div>
               </div>
 
@@ -586,7 +595,7 @@
                   <i data-lucide="file-up" class="dropzone-icon"></i>
                   <p class="dropzone-text">Постави файловете тук или <span>избери</span></p>
                   <input type="file" id="file-input-staff"
-                    accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.rtf" class="file-input-hidden" multiple>
+                    accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.txt,.rtf,.ppt,.pptx,.odt,.ods,.odp" class="file-input-hidden" multiple>
                 </div>
               </div>
 
