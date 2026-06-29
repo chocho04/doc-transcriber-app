@@ -1,7 +1,104 @@
+// File-type helpers — work for both base64 data URLs and saved uploads/ URLs.
+function checkIsImage(url) {
+  if (!url) return false;
+  return url.startsWith('data:image/') || /\.(jpg|jpeg|png|gif|webp)(\?|$)/i.test(url);
+}
+function checkIsPdf(url) {
+  if (!url) return false;
+  return url.startsWith('data:application/pdf') || /\.pdf(\?|$)/i.test(url);
+}
+function checkIsText(url) {
+  if (!url) return false;
+  return url.startsWith('data:text/') || url.startsWith('data:application/rtf') || /\.(txt|rtf|csv)(\?|$)/i.test(url);
+}
+
+// Uploads a base64 data URL to the dev server, which stores it in the uploads/ folder
+// and returns a relative URL (e.g. "uploads/invoice_123.jpg"). On any failure it returns
+// the original base64 so the document is never lost (it just stays inline in localStorage).
+async function uploadFileToServer(base64Data, filename) {
+  if (!base64Data || !base64Data.startsWith('data:')) {
+    return base64Data; // already a URL or empty — nothing to upload
+  }
+  const apiEndpoint = window.location.protocol === 'file:'
+    ? 'http://127.0.0.1:8080/api/upload-file'
+    : '/api/upload-file';
+  try {
+    const response = await fetch(apiEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: filename || 'file', base64Data })
+    });
+    if (!response.ok) {
+      let errMsg = `Upload status ${response.status}`;
+      try { const j = await response.json(); if (j && j.error) errMsg = j.error; } catch (_) {}
+      throw new Error(errMsg);
+    }
+    const result = await response.json();
+    if (result && result.success && result.url) {
+      return result.url;
+    }
+    throw new Error(result.error || 'Unknown upload response');
+  } catch (err) {
+    console.warn('File upload failed, keeping inline base64:', err);
+    return base64Data;
+  }
+}
+
+// Best-effort deletion of a previously uploaded file from the server's uploads/
+// folder. Only acts on "uploads/..." URLs — base64/data URLs and external links
+// have no server file. Fire-and-forget: the entry is removed locally regardless.
+function deleteFileFromServer(imageUrl) {
+  if (!imageUrl || typeof imageUrl !== 'string' || !imageUrl.startsWith('uploads/')) {
+    return;
+  }
+  const apiEndpoint = window.location.protocol === 'file:'
+    ? 'http://127.0.0.1:8080/api/delete-file'
+    : '/api/delete-file';
+  fetch(apiEndpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: imageUrl })
+  }).catch(err => console.warn('Failed to delete server file:', imageUrl, err));
+}
+
+// The admin password gates deletions AND access to the Settings panel.
+// Defaults to "1234" until the user changes it in Settings (an empty value
+// also falls back to the default, so the gate can never be removed entirely).
+const DEFAULT_ADMIN_PASSWORD = '1234';
+function getAdminPassword() {
+  return (localStorage.getItem('admin_delete_password') || '').trim() || DEFAULT_ADMIN_PASSWORD;
+}
+
+// Becomes true once the admin password is entered this session, so the Settings
+// panel doesn't re-prompt every time it's opened. Resets on page reload.
+let settingsUnlocked = false;
+function unlockSettings() {
+  if (settingsUnlocked) return true;
+  const entered = prompt('Въведете администраторска парола за достъп до настройките:');
+  if (entered === null) return false; // cancelled
+  if (entered.trim() === getAdminPassword()) {
+    settingsUnlocked = true;
+    return true;
+  }
+  showToast('Грешна администраторска парола.', 'alert-triangle');
+  return false;
+}
+
+// Gates a delete action behind the admin password. Drop-in replacement for
+// confirm(): returns true only when the user types the correct admin password.
+function confirmDelete(message) {
+  const entered = prompt(`${message}\n\nВъведете администраторска парола, за да изтриете:`);
+  if (entered === null) return false; // cancelled
+  if (entered.trim() === getAdminPassword()) return true;
+  showToast('Грешна администраторска парола. Изтриването е отменено.', 'alert-triangle');
+  return false;
+}
+
 // State Management
 let state = {
   apiKey: localStorage.getItem('gemini_api_key') || '',
   cloudConvertApiKey: localStorage.getItem('cloudconvert_api_key') || '',
+  cloudConvertFormat: localStorage.getItem('cloudconvert_format') || 'pdf', // 'pdf' or 'png' — target for unsupported file types
   documents: JSON.parse(localStorage.getItem('saved_documents')) || [],
   generalDocs: JSON.parse(localStorage.getItem('saved_general_documents')) || [],
   staff: JSON.parse(localStorage.getItem('saved_staff')) || [],
@@ -209,7 +306,9 @@ const elements = {
   apiKeyInput: document.getElementById('api-key-input'),
   cloudConvertApiKeyInput: document.getElementById('cloudconvert-api-key-input'),
   cloudConvertApiKeyBadge: document.getElementById('cloudconvert-api-key-badge'),
+  cloudConvertFormatSelect: document.getElementById('cloudconvert-format-select'),
   appPinInput: document.getElementById('app-pin-input'),
+  adminPasswordInput: document.getElementById('admin-password-input'),
   
   // Lightbox Modal
   modalImage: document.getElementById('modal-image'),
@@ -262,6 +361,15 @@ const elements = {
 
 // Initialize Application
 function init() {
+  // One-time self-heal: an earlier build let the browser autofill the masked
+  // admin field and persist that value, locking users out of Settings with a
+  // password they never set. Clear it once so the "1234" default applies again.
+  // (A user-set password afterwards still persists — this runs only once.)
+  if (!localStorage.getItem('admin_pw_reset_v1')) {
+    localStorage.removeItem('admin_delete_password');
+    localStorage.setItem('admin_pw_reset_v1', '1');
+  }
+
   initPINAuthentication();
   applyTheme();
   updateApiKeyBadge();
@@ -278,8 +386,14 @@ function init() {
   if (elements.cloudConvertApiKeyInput) {
     elements.cloudConvertApiKeyInput.value = state.cloudConvertApiKey;
   }
+  if (elements.cloudConvertFormatSelect) {
+    elements.cloudConvertFormatSelect.value = state.cloudConvertFormat;
+  }
   if (elements.appPinInput) {
     elements.appPinInput.value = localStorage.getItem('app_access_pin') || '1234';
+  }
+  if (elements.adminPasswordInput) {
+    elements.adminPasswordInput.value = getAdminPassword();
   }
   
   renderDocumentList();
@@ -747,7 +861,7 @@ Rules:
       };
     }
     
-    saveTranscription(parsedResult);
+    await saveTranscription(parsedResult);
     showToast('Документът е транскрибиран успешно!', 'check-circle');
     resetPreview();
     if (!isBatch) {
@@ -861,7 +975,7 @@ Rules:
       };
     }
     
-    saveGeneralDocTranscription(parsedResult);
+    await saveGeneralDocTranscription(parsedResult);
     showToast('Документът е анализиран успешно!', 'check-circle');
     resetPreviewDocs();
     if (!isBatch) {
@@ -968,7 +1082,7 @@ Rules:
       };
     }
     
-    saveStaffDocTranscription(parsedResult);
+    await saveStaffDocTranscription(parsedResult);
     showToast('Документът е анализиран успешно!', 'check-circle');
     resetPreviewStaff();
     if (!isBatch) {
@@ -1088,7 +1202,7 @@ function handleFileDocs(file) {
       </div>
       <div class="doc-placeholder-info">
         <div class="doc-placeholder-name" title="${escapeHTML(file.name)}">${escapeHTML(file.name)}</div>
-        <div class="doc-placeholder-size">Конвертиране в PDF...</div>
+        <div class="doc-placeholder-size">Конвертиране в ${state.cloudConvertFormat === 'png' ? 'PNG' : 'PDF'}...</div>
       </div>
     `;
     
@@ -1217,7 +1331,7 @@ function handleFileStaff(file) {
       </div>
       <div class="doc-placeholder-info">
         <div class="doc-placeholder-name" title="${escapeHTML(file.name)}">${escapeHTML(file.name)}</div>
-        <div class="doc-placeholder-size">Конвертиране в PDF...</div>
+        <div class="doc-placeholder-size">Конвертиране в ${state.cloudConvertFormat === 'png' ? 'PNG' : 'PDF'}...</div>
       </div>
     `;
     
@@ -1330,7 +1444,7 @@ function handleFileStaff(file) {
 // Data Persistence (localStorage)
 // ==========================================
 
-function saveTranscription(parsedResult) {
+async function saveTranscription(parsedResult) {
   const name = state.capturedFileName || 'Untitled Document';
   
   // Classify based on uploader name, supplier details, or inferred type
@@ -1371,7 +1485,7 @@ function saveTranscription(parsedResult) {
     products: parsedResult.products || [],
     totalAmount: parsedResult.totalAmount != null ? parseFloat(parsedResult.totalAmount) : null,
     type: finalType,
-    image: state.capturedImageBase64,
+    image: await uploadFileToServer(state.capturedImageBase64, state.capturedFileName || 'invoice'),
     timestamp: Date.now()
   };
   
@@ -1395,14 +1509,14 @@ function saveTranscription(parsedResult) {
   renderDocumentList();
 }
 
-function saveGeneralDocTranscription(parsedResult) {
+async function saveGeneralDocTranscription(parsedResult) {
   const name = parsedResult.name || state.capturedFileNameDocs || 'Untitled Document';
-  
+
   const newDoc = {
     id: 'gdoc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
     name: name,
     type: parsedResult.type || 'other',
-    image: state.capturedImageBase64Docs,
+    image: await uploadFileToServer(state.capturedImageBase64Docs, state.capturedFileNameDocs || 'document'),
     issueDate: normalizeDate(parsedResult.issueDate) || new Date().toISOString().slice(0, 10),
     expiryDate: normalizeDate(parsedResult.expiryDate),
     supplier: parsedResult.supplier || null,
@@ -1426,18 +1540,21 @@ function saveGeneralDocTranscription(parsedResult) {
   renderGeneralDocumentList();
 }
 
-function saveStaffDocTranscription(parsedResult) {
+async function saveStaffDocTranscription(parsedResult) {
   const category = parsedResult.docCategory || 'other';
   const docName = parsedResult.docName || state.capturedFileNameStaff || 'Документ';
   const issueDate = normalizeDate(parsedResult.issueDate) || new Date().toISOString().slice(0, 10);
-  
+
+  // Save the file into uploads/ once; reuse the returned URL for whichever bucket it lands in.
+  const imageUrl = await uploadFileToServer(state.capturedImageBase64Staff, state.capturedFileNameStaff || 'staff_doc');
+
   if (category === 'payroll' || category === 'schedule' || (category === 'other' && !parsedResult.employeeName)) {
     // Save to general staff documents
     const newGenDoc = {
       id: 'sgdoc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
       name: docName,
       type: category, // 'payroll', 'schedule', 'other'
-      image: state.capturedImageBase64Staff,
+      image: imageUrl,
       date: issueDate,
       timestamp: Date.now()
     };
@@ -1464,7 +1581,7 @@ function saveStaffDocTranscription(parsedResult) {
   const newSubDoc = {
     id: 'sdoc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
     name: docName,
-    image: state.capturedImageBase64Staff,
+    image: imageUrl,
     uploadDate: issueDate,
     fullText: parsedResult.fullText || ''
   };
@@ -1499,7 +1616,7 @@ function saveStaffDocTranscription(parsedResult) {
     const unattachedDoc = {
       id: 'udoc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
       name: docName,
-      image: state.capturedImageBase64Staff,
+      image: imageUrl,
       uploadDate: issueDate,
       extractedName: employeeName,
       extractedPosition: parsedResult.employeePosition ? parsedResult.employeePosition.trim() : '',
@@ -1522,6 +1639,8 @@ function saveStaffDocTranscription(parsedResult) {
 }
 
 function deleteGeneralDocument(id) {
+  const doc = state.generalDocs.find(d => d.id === id);
+  if (doc) deleteFileFromServer(doc.image);
   state.generalDocs = state.generalDocs.filter(d => d.id !== id);
   localStorage.setItem('saved_general_documents', JSON.stringify(state.generalDocs));
   renderGeneralDocumentList();
@@ -1530,6 +1649,10 @@ function deleteGeneralDocument(id) {
 }
 
 function deleteStaffPerson(personId) {
+  const person = state.staff.find(p => p.id === personId);
+  if (person && Array.isArray(person.documents)) {
+    person.documents.forEach(d => deleteFileFromServer(d.image));
+  }
   state.staff = state.staff.filter(p => p.id !== personId);
   localStorage.setItem('saved_staff', JSON.stringify(state.staff));
   renderStaffList();
@@ -1539,6 +1662,8 @@ function deleteStaffPerson(personId) {
 function deleteStaffDocument(personId, docId) {
   const person = state.staff.find(p => p.id === personId);
   if (person) {
+    const sub = person.documents.find(d => d.id === docId);
+    if (sub) deleteFileFromServer(sub.image);
     person.documents = person.documents.filter(d => d.id !== docId);
     localStorage.setItem('saved_staff', JSON.stringify(state.staff));
     renderStaffList();
@@ -1624,7 +1749,9 @@ function attachUnattachedDoc(docId, optionValue) {
 }
 
 function deleteUnattachedDoc(docId) {
-  if (confirm('Наистина ли искате да изтриете този неприкачен документ?')) {
+  if (confirmDelete('Наистина ли искате да изтриете този неприкачен документ?')) {
+    const doc = state.unattachedStaffDocs.find(d => d.id === docId);
+    if (doc) deleteFileFromServer(doc.image);
     state.unattachedStaffDocs = state.unattachedStaffDocs.filter(d => d.id !== docId);
     localStorage.setItem('saved_unattached_staff_docs', JSON.stringify(state.unattachedStaffDocs));
     renderStaffList();
@@ -1633,6 +1760,8 @@ function deleteUnattachedDoc(docId) {
 }
 
 function deleteDocument(id) {
+  const target = state.documents.find(doc => doc.id === id);
+  if (target) deleteFileFromServer(target.image);
   state.documents = state.documents.filter(doc => doc.id !== id);
   localStorage.setItem('saved_documents', JSON.stringify(state.documents));
   renderDocumentList();
@@ -1641,7 +1770,8 @@ function deleteDocument(id) {
 }
 
 function clearAllDocuments() {
-  if (confirm('Наистина ли искате да изтриете всички записани документи? Това действие е необратимо.')) {
+  if (confirmDelete('Наистина ли искате да изтриете всички записани документи? Това действие е необратимо.')) {
+    state.documents.forEach(d => deleteFileFromServer(d.image));
     state.documents = [];
     localStorage.setItem('saved_documents', JSON.stringify(state.documents));
     renderDocumentList();
@@ -1898,7 +2028,7 @@ function renderDocumentList() {
     const dateValue = normalizeDate(doc.date);
     const amountValue = doc.totalAmount != null ? Number(doc.totalAmount).toFixed(2) : '';
     
-    const isImage = doc.image && doc.image.startsWith('data:image/');
+    const isImage = checkIsImage(doc.image);
     const linkIcon = isImage ? 'image' : 'file-text';
     const linkLabel = isImage ? 'Снимка' : 'Файл';
     
@@ -1972,7 +2102,7 @@ function renderDocumentList() {
     }
     item.querySelector('.btn-row-delete').addEventListener('click', (e) => {
       e.stopPropagation();
-      if (confirm('Наистина ли искате да изтриете тази фактура?')) {
+      if (confirmDelete('Наистина ли искате да изтриете тази фактура?')) {
         deleteDocument(doc.id);
       }
     });
@@ -2058,7 +2188,7 @@ function renderExpiringDocuments() {
     item.dataset.id = doc.id;
 
     const expiryDateVal = normalizeDate(doc.expiryDate);
-    const isImage = doc.image && doc.image.startsWith('data:image/');
+    const isImage = checkIsImage(doc.image);
     const linkIcon = isImage ? 'image' : 'file-text';
     const linkLabel = isImage ? 'Снимка' : 'Файл';
     const typeLabel = doc.type === 'permit' ? 'Разрешително' : 'Договор';
@@ -2271,7 +2401,7 @@ function renderGeneralDocumentList() {
     const issueDateVal = normalizeDate(doc.issueDate);
     const expiryDateVal = normalizeDate(doc.expiryDate);
     
-    const isImage = doc.image && doc.image.startsWith('data:image/');
+    const isImage = checkIsImage(doc.image);
     const linkIcon = isImage ? 'image' : 'file-text';
     const linkLabel = isImage ? 'Снимка' : 'Файл';
     
@@ -2371,7 +2501,7 @@ function renderGeneralDocumentList() {
     });
     item.querySelector('.btn-row-delete-doc').addEventListener('click', (e) => {
       e.stopPropagation();
-      if (confirm('Наистина ли искате да изтриете този документ?')) {
+      if (confirmDelete('Наистина ли искате да изтриете този документ?')) {
         deleteGeneralDocument(doc.id);
       }
     });
@@ -2756,7 +2886,7 @@ function setupStaffItemEvents(item, person) {
   if (deleteBtn) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (confirm(`Наистина ли искате да изтриете служителя ${person.name} и всички негови документи?`)) {
+      if (confirmDelete(`Наистина ли искате да изтриете служителя ${person.name} и всички негови документи?`)) {
         deleteStaffPerson(person.id);
       }
     });
@@ -2846,7 +2976,7 @@ function renderStaffGeneralDocsList() {
     item.dataset.id = doc.id;
     
     const docDateVal = normalizeDate(doc.date) || new Date().toISOString().slice(0, 10);
-    const isImage = doc.image && doc.image.startsWith('data:image/');
+    const isImage = checkIsImage(doc.image);
     const linkIcon = isImage ? 'image' : 'file-text';
     const linkLabel = isImage ? 'Снимка' : 'Файл';
     
@@ -2922,7 +3052,7 @@ function renderStaffGeneralDocsList() {
     // Delete action
     item.querySelector('.btn-delete-staff-gen').addEventListener('click', (e) => {
       e.stopPropagation();
-      if (confirm('Наистина ли искате да изтриете този документ?')) {
+      if (confirmDelete('Наистина ли искате да изтриете този документ?')) {
         deleteStaffGeneralDocument(doc.id);
       }
     });
@@ -2935,6 +3065,8 @@ function renderStaffGeneralDocsList() {
 }
 
 function deleteStaffGeneralDocument(id) {
+  const target = state.staffGeneralDocs.find(doc => doc.id === id);
+  if (target) deleteFileFromServer(target.image);
   state.staffGeneralDocs = state.staffGeneralDocs.filter(doc => doc.id !== id);
   try {
     localStorage.setItem('saved_staff_general_documents', JSON.stringify(state.staffGeneralDocs));
@@ -3016,7 +3148,7 @@ function renderStaffPersonDocs(person, docsList) {
     docRow.className = 'staff-doc-row';
     docRow.dataset.id = doc.id;
     
-    const isImage = doc.image && doc.image.startsWith('data:image/');
+    const isImage = checkIsImage(doc.image);
     const linkIcon = isImage ? 'image' : 'file-text';
     const uploadDateFormatted = normalizeDate(doc.uploadDate);
     
@@ -3070,7 +3202,7 @@ function renderStaffPersonDocs(person, docsList) {
     
     docRow.querySelector('.btn-delete-staff-doc').addEventListener('click', (e) => {
       e.stopPropagation();
-      if (confirm('Наистина ли искате да изтриете този документ?')) {
+      if (confirmDelete('Наистина ли искате да изтриете този документ?')) {
         deleteStaffDocument(person.id, doc.id);
         renderStaffPersonDocs(person, docsList);
         renderStaffList();
@@ -3116,7 +3248,7 @@ function openGeneralDocDetailsModal(doc) {
     if (elements.containerViewDocProducts) elements.containerViewDocProducts.classList.add('hidden');
   }
   
-  const isImage = doc.image && doc.image.startsWith('data:image/');
+  const isImage = checkIsImage(doc.image);
   
   if (isImage) {
     elements.modalDocPreviewImg.src = doc.image;
@@ -3329,7 +3461,7 @@ function openDocDetailsModal(doc) {
     existingModalPlaceholder.remove();
   }
   
-  const isImage = doc.image && doc.image.startsWith('data:image/');
+  const isImage = checkIsImage(doc.image);
   
   if (doc.image) {
     elements.btnViewExpand.classList.remove('hidden');
@@ -3520,6 +3652,7 @@ function updateCloudConvertApiKeyBadge() {
 }
 
 function showSettingsPanelAndFocusKey() {
+  if (!unlockSettings()) return;
   if (elements.backupPanel) {
     elements.backupPanel.classList.remove('hidden');
   }
@@ -3531,6 +3664,7 @@ function showSettingsPanelAndFocusKey() {
 }
 
 function showSettingsPanelAndFocusCloudConvertKey() {
+  if (!unlockSettings()) return;
   if (elements.backupPanel) {
     elements.backupPanel.classList.remove('hidden');
   }
@@ -3604,49 +3738,60 @@ function openFileInModal(base64DataUrl, fileName) {
   
   caption.textContent = fileName;
   
-  const isImage = base64DataUrl && base64DataUrl.startsWith('data:image/');
-  const isPdf = base64DataUrl && base64DataUrl.startsWith('data:application/pdf');
-  const isText = base64DataUrl && (base64DataUrl.startsWith('data:text/') || base64DataUrl.startsWith('data:application/rtf'));
-  
+  const isImage = checkIsImage(base64DataUrl);
+  const isPdf = checkIsPdf(base64DataUrl);
+  const isText = checkIsText(base64DataUrl);
+  const isDataUrl = base64DataUrl && base64DataUrl.startsWith('data:');
+
   if (isImage) {
     img.src = base64DataUrl;
     img.classList.remove('hidden');
   } else if (isPdf) {
-    try {
-      const parts = base64DataUrl.split(';base64,');
-      const contentType = parts[0].split(':')[1];
-      const raw = window.atob(parts[1]);
-      const rawLength = raw.length;
-      const uInt8Array = new Uint8Array(rawLength);
-      for (let i = 0; i < rawLength; ++i) {
-        uInt8Array[i] = raw.charCodeAt(i);
-      }
-      const blob = new Blob([uInt8Array], { type: contentType });
-      activeLightboxBlobUrl = URL.createObjectURL(blob);
-      
-      iframe.src = activeLightboxBlobUrl;
-      iframe.classList.remove('hidden');
-    } catch (e) {
-      console.error("Failed to render PDF in iframe", e);
-      iframe.src = base64DataUrl;
-      iframe.classList.remove('hidden');
-    }
-  } else if (isText) {
-    try {
-      const parts = base64DataUrl.split(';base64,');
-      const decodedText = decodeURIComponent(escape(window.atob(parts[1])));
-      textContainer.textContent = decodedText;
-      textContainer.classList.remove('hidden');
-    } catch (e) {
+    if (isDataUrl) {
       try {
         const parts = base64DataUrl.split(';base64,');
-        const decodedText = window.atob(parts[1]);
-        textContainer.textContent = decodedText;
-        textContainer.classList.remove('hidden');
-      } catch (err) {
-        textContainer.textContent = "Неуспешно зареждане на текстовия файл.";
-        textContainer.classList.remove('hidden');
+        const contentType = parts[0].split(':')[1];
+        const raw = window.atob(parts[1]);
+        const rawLength = raw.length;
+        const uInt8Array = new Uint8Array(rawLength);
+        for (let i = 0; i < rawLength; ++i) {
+          uInt8Array[i] = raw.charCodeAt(i);
+        }
+        const blob = new Blob([uInt8Array], { type: contentType });
+        activeLightboxBlobUrl = URL.createObjectURL(blob);
+
+        iframe.src = activeLightboxBlobUrl;
+      } catch (e) {
+        console.error("Failed to render PDF in iframe", e);
+        iframe.src = base64DataUrl;
       }
+    } else {
+      // Saved uploads/ URL — let the dev server serve it directly.
+      iframe.src = base64DataUrl;
+    }
+    iframe.classList.remove('hidden');
+  } else if (isText) {
+    if (isDataUrl) {
+      try {
+        const parts = base64DataUrl.split(';base64,');
+        const decodedText = decodeURIComponent(escape(window.atob(parts[1])));
+        textContainer.textContent = decodedText;
+      } catch (e) {
+        try {
+          const parts = base64DataUrl.split(';base64,');
+          textContainer.textContent = window.atob(parts[1]);
+        } catch (err) {
+          textContainer.textContent = "Неуспешно зареждане на текстовия файл.";
+        }
+      }
+      textContainer.classList.remove('hidden');
+    } else {
+      // Saved uploads/ URL — fetch the text content from the server.
+      fetch(base64DataUrl)
+        .then(r => r.text())
+        .then(t => { textContainer.textContent = t; })
+        .catch(() => { textContainer.textContent = "Неуспешно зареждане на текстовия файл."; });
+      textContainer.classList.remove('hidden');
     }
   } else {
     // Show download button fallback
@@ -3851,6 +3996,15 @@ function setupEventListeners() {
     });
   }
 
+  // Real-time conversion output-format sync (PDF vs PNG image)
+  if (elements.cloudConvertFormatSelect) {
+    elements.cloudConvertFormatSelect.addEventListener('change', (e) => {
+      const fmt = e.target.value === 'png' ? 'png' : 'pdf';
+      state.cloudConvertFormat = fmt;
+      localStorage.setItem('cloudconvert_format', fmt);
+    });
+  }
+
   // Real-time Access PIN Sync & Validation
   if (elements.appPinInput) {
     elements.appPinInput.addEventListener('change', (e) => {
@@ -3879,6 +4033,21 @@ function setupEventListeners() {
       }
       
       initPINAuthentication();
+    });
+  }
+
+  // Admin password sync (gates deletions + Settings access). Saved per-device,
+  // not included in backups. Empty reverts to the default "1234".
+  if (elements.adminPasswordInput) {
+    elements.adminPasswordInput.addEventListener('change', (e) => {
+      const pwd = e.target.value.trim();
+      localStorage.setItem('admin_delete_password', pwd);
+      if (!pwd) {
+        elements.adminPasswordInput.value = DEFAULT_ADMIN_PASSWORD;
+        showToast(`Паролата е върната по подразбиране (${DEFAULT_ADMIN_PASSWORD}).`, 'info');
+      } else {
+        showToast('Администраторската парола е променена.', 'check-circle');
+      }
     });
   }
 
@@ -3956,15 +4125,19 @@ function setupEventListeners() {
     });
   });
 
-  // Settings Gear Trigger (Footer Collapse/Expand)
-  const btnSettingsGear = elements.btnSettingsGear;
-  if (btnSettingsGear) {
-    btnSettingsGear.addEventListener('click', () => {
-      if (elements.backupPanel) {
-        elements.backupPanel.classList.toggle('hidden');
+  // Settings Gear Trigger (Footer Collapse/Expand) — gated by the admin password.
+  document.querySelectorAll('.btn-settings-gear').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (!elements.backupPanel) return;
+      const opening = elements.backupPanel.classList.contains('hidden');
+      if (opening) {
+        if (!unlockSettings()) return; // require admin password to open
+        elements.backupPanel.classList.remove('hidden');
+      } else {
+        elements.backupPanel.classList.add('hidden'); // closing needs no password
       }
     });
-  }
+  });
 
   // Mobile Camera Capture Actions
   const btnMobileCamera = document.getElementById('btn-mobile-camera');
@@ -4233,7 +4406,7 @@ function setupEventListeners() {
   // Delete document from detail pane
   elements.btnDeleteDoc.addEventListener('click', () => {
     if (state.currentlyViewingDocId) {
-      if (confirm('Наистина ли искате да изтриете този документ?')) {
+      if (confirmDelete('Наистина ли искате да изтриете този документ?')) {
         deleteDocument(state.currentlyViewingDocId);
       }
     }
@@ -4331,7 +4504,7 @@ function setupEventListeners() {
     if (target) {
       const id = target.dataset.id;
       const doc = state.documents.find(d => d.id === id);
-      if (doc && doc.image && doc.image.startsWith('data:image/')) {
+      if (doc && checkIsImage(doc.image)) {
         elements.hoverPreviewImg.src = doc.image;
         elements.hoverPreview.classList.remove('hidden');
       }
@@ -4634,7 +4807,8 @@ function setupEventListeners() {
 
   if (elements.btnClearAllDocs) {
     elements.btnClearAllDocs.addEventListener('click', () => {
-      if (confirm('Наистина ли искате да изтриете всички записани документи в този раздел?')) {
+      if (confirmDelete('Наистина ли искате да изтриете всички записани документи в този раздел?')) {
+        state.generalDocs.forEach(d => deleteFileFromServer(d.image));
         state.generalDocs = [];
         localStorage.setItem('saved_general_documents', JSON.stringify(state.generalDocs));
         renderGeneralDocumentList();
@@ -4758,7 +4932,7 @@ function setupEventListeners() {
   if (elements.btnDeleteDocGeneral) {
     elements.btnDeleteDocGeneral.addEventListener('click', () => {
       if (state.currentlyViewingDocIdDocs) {
-        if (confirm('Наистина ли искате да изтриете този документ?')) {
+        if (confirmDelete('Наистина ли искате да изтриете този документ?')) {
           deleteGeneralDocument(state.currentlyViewingDocIdDocs);
         }
       }
@@ -4798,7 +4972,7 @@ function setupEventListeners() {
       if (target) {
         const id = target.dataset.id;
         const doc = state.generalDocs.find(d => d.id === id);
-        if (doc && doc.image && doc.image.startsWith('data:image/')) {
+        if (doc && checkIsImage(doc.image)) {
           elements.hoverPreviewImg.src = doc.image;
           elements.hoverPreview.classList.remove('hidden');
         }
@@ -4948,7 +5122,7 @@ function setupEventListeners() {
   if (elements.btnDeleteStaffDocSub) {
     elements.btnDeleteStaffDocSub.addEventListener('click', () => {
       if (state.currentlyViewingStaffPersonId && state.currentlyViewingStaffDocId) {
-        if (confirm('Наистина ли искате да изтриете този документ?')) {
+        if (confirmDelete('Наистина ли искате да изтриете този документ?')) {
           deleteStaffDocument(state.currentlyViewingStaffPersonId, state.currentlyViewingStaffDocId);
           closeModal(elements.modalStaffDocDetails);
         }
@@ -5334,11 +5508,14 @@ async function convertFileToPdf(file) {
   }
 
   const base64Data = await readFileAsDataURL(file);
-  
+
+  // User-selected target format for files Gemini can't read natively.
+  const outputFormat = state.cloudConvertFormat === 'png' ? 'png' : 'pdf';
+
   const apiEndpoint = window.location.protocol === 'file:'
     ? `http://127.0.0.1:8080/api/convert-to-pdf`
     : '/api/convert-to-pdf';
-    
+
   const response = await fetch(apiEndpoint, {
     method: 'POST',
     headers: {
@@ -5347,10 +5524,11 @@ async function convertFileToPdf(file) {
     body: JSON.stringify({
       filename: file.name,
       base64Data: base64Data,
-      cloudConvertApiKey: apiKey
+      cloudConvertApiKey: apiKey,
+      outputFormat: outputFormat
     })
   });
-  
+
   if (!response.ok) {
     let errMsg = `Грешка при конвертиране (${response.status})`;
     try {
@@ -5359,15 +5537,16 @@ async function convertFileToPdf(file) {
     } catch (_) {}
     throw new Error(errMsg);
   }
-  
+
   const result = await response.json();
   if (!result.success || !result.base64Data) {
     throw new Error(result.error || 'Неизвестна грешка при конвертирането.');
   }
-  
-  const pdfBase64 = result.base64Data;
-  const parts = pdfBase64.split(';base64,');
-  const contentType = parts[0].split(':')[1] || 'application/pdf';
+
+  const convertedBase64 = result.base64Data;
+  const parts = convertedBase64.split(';base64,');
+  const fallbackType = outputFormat === 'png' ? 'image/png' : 'application/pdf';
+  const contentType = parts[0].split(':')[1] || fallbackType;
   const byteCharacters = atob(parts[1]);
   const byteNumbers = new Array(byteCharacters.length);
   for (let i = 0; i < byteCharacters.length; i++) {
@@ -5375,12 +5554,12 @@ async function convertFileToPdf(file) {
   }
   const byteArray = new Uint8Array(byteNumbers);
   const blob = new Blob([byteArray], { type: contentType });
-  
+
   const lastDotIndex = file.name.lastIndexOf('.');
   const baseName = lastDotIndex !== -1 ? file.name.substring(0, lastDotIndex) : file.name;
-  const pdfName = `${baseName}.pdf`;
-  
-  return new File([blob], pdfName, { type: 'application/pdf' });
+  const convertedName = `${baseName}.${outputFormat}`;
+
+  return new File([blob], convertedName, { type: contentType });
 }
 
 
@@ -5516,7 +5695,7 @@ function handleFile(file) {
       </div>
       <div class="doc-placeholder-info">
         <div class="doc-placeholder-name" title="${escapeHTML(file.name)}">${escapeHTML(file.name)}</div>
-        <div class="doc-placeholder-size">Конвертиране в PDF...</div>
+        <div class="doc-placeholder-size">Конвертиране в ${state.cloudConvertFormat === 'png' ? 'PNG' : 'PDF'}...</div>
       </div>
     `;
     
@@ -5682,6 +5861,7 @@ function backupDataZip() {
       saved_staff_general_documents: state.staffGeneralDocs,
       gemini_api_key: state.apiKey,
       cloudconvert_api_key: state.cloudConvertApiKey,
+      cloudconvert_format: state.cloudConvertFormat,
       theme: state.theme,
       my_company_name: state.myCompany
     };
@@ -5757,6 +5937,9 @@ function handleRestoreFile(file) {
               if (data.cloudconvert_api_key !== undefined) {
                 localStorage.setItem('cloudconvert_api_key', data.cloudconvert_api_key);
               }
+              if (data.cloudconvert_format !== undefined) {
+                localStorage.setItem('cloudconvert_format', data.cloudconvert_format);
+              }
               if (data.theme !== undefined) {
                 localStorage.setItem('theme', data.theme);
               }
@@ -5771,6 +5954,7 @@ function handleRestoreFile(file) {
               state.staffGeneralDocs = restoredStaffGeneralDocs;
               state.apiKey = data.gemini_api_key || '';
               state.cloudConvertApiKey = data.cloudconvert_api_key || '';
+              state.cloudConvertFormat = data.cloudconvert_format || 'pdf';
               state.theme = data.theme || 'dark';
               state.myCompany = data.my_company_name || '';
               
@@ -5780,6 +5964,9 @@ function handleRestoreFile(file) {
               updateCloudConvertApiKeyBadge();
               if (elements.cloudConvertApiKeyInput) {
                 elements.cloudConvertApiKeyInput.value = state.cloudConvertApiKey;
+              }
+              if (elements.cloudConvertFormatSelect) {
+                elements.cloudConvertFormatSelect.value = state.cloudConvertFormat;
               }
               elements.headerCompanyInput.value = state.myCompany;
               migrateOldDocuments();

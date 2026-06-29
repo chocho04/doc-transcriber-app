@@ -296,87 +296,15 @@
           </div>
         </section>
 
-        <!-- Settings Toggle Button at the bottom of panel -->
+        <!-- Settings Toggle Button -->
         <div class="settings-toggle-container"
-          style="display: flex; justify-content: center; margin-top: 1rem; margin-bottom: 0.5rem;">
-          <button id="btn-settings-gear" class="btn btn-secondary icon-btn"
+          style="display: flex; justify-content: center; align-items: center; margin-top: 1.5rem; margin-bottom: 0.5rem;">
+          <button class="btn btn-secondary icon-btn btn-settings-gear"
             style="gap: 0.5rem; padding: 0.6rem 1.2rem; border-radius: var(--radius-md);">
             <i data-lucide="settings"></i>
             <span>Настройки</span>
           </button>
         </div>
-
-        <!-- Bottom Panel: Settings & Data Portability -->
-        <footer class="panel backup-panel hidden" style="margin-top: 0.5rem;">
-          <div class="panel-body footer-settings-body">
-
-            <!-- Left Column: Settings -->
-            <div class="footer-settings-column">
-              <div class="footer-section-header">
-                <i data-lucide="settings" class="text-accent"></i>
-                <h3>Настройки / Settings</h3>
-              </div>
-              <div class="footer-settings-controls footer-settings-controls-row" style="flex-wrap: wrap;">
-                <div class="footer-company-group">
-                  <label for="header-company-input">Моята Фирма / My Company</label>
-                  <input type="text" id="header-company-input" class="header-company-input"
-                    placeholder="Въведете име на фирма...">
-                </div>
-                <div class="footer-company-group">
-                  <label for="api-key-input">Gemini API Key</label>
-                  <div style="display: flex; gap: 0.5rem; align-items: center; width: 100%;">
-                    <input type="password" id="api-key-input" class="header-company-input" placeholder="AIzaSy...">
-                    <span id="api-key-badge" class="badge badge-error" style="height: 38px; width: 38px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); flex-shrink: 0; padding: 0;">
-                      <i data-lucide="circle-x" style="margin: 0; width: 18px; height: 18px;"></i>
-                    </span>
-                  </div>
-                </div>
-                <div class="footer-company-group">
-                  <label for="cloudconvert-api-key-input">CloudConvert API Key</label>
-                  <div style="display: flex; gap: 0.5rem; align-items: center; width: 100%;">
-                    <input type="password" id="cloudconvert-api-key-input" class="header-company-input" placeholder="Копирайте sk-...">
-                    <span id="cloudconvert-api-key-badge" class="badge badge-error" style="height: 38px; width: 38px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); flex-shrink: 0; padding: 0;">
-                      <i data-lucide="circle-x" style="margin: 0; width: 18px; height: 18px;"></i>
-                    </span>
-                  </div>
-                </div>
-                <div class="footer-company-group">
-                  <label for="app-pin-input">PIN код за достъп / Access PIN</label>
-                  <input type="password" maxlength="10" pattern="[0-9]{4,10}" id="app-pin-input" class="header-company-input" placeholder="1234">
-                </div>
-              </div>
-            </div>
-
-            <!-- Divider (desktop only) -->
-            <div class="footer-divider"></div>
-
-            <!-- Right Column: Backup & Restore -->
-            <div class="footer-settings-column">
-              <div class="footer-section-header">
-                <i data-lucide="database-backup" class="text-accent"></i>
-                <h3>Архивиране и Възстановяване / Backup & Restore</h3>
-              </div>
-              <div class="footer-settings-controls">
-                <p class="subtitle"
-                  style="font-size: 0.85rem; color: var(--text-secondary); text-align: center; margin-bottom: 0.5rem; line-height: 1.4;">
-                  Направете пълно резервно копие на вашите данни или качете архив, за да ги възстановите.
-                </p>
-                <div class="backup-actions">
-                  <button id="btn-backup" class="btn btn-secondary">
-                    <i data-lucide="download"></i>
-                    <span>Създай архив (ZIP)</span>
-                  </button>
-                  <button id="btn-restore" class="btn btn-secondary">
-                    <i data-lucide="upload"></i>
-                    <span>Възстанови от архив (ZIP)</span>
-                  </button>
-                  <input type="file" id="backup-file-input" accept=".zip" style="display: none;">
-                </div>
-              </div>
-            </div>
-
-          </div>
-        </footer>
       </div>
 
       <!-- VIEW 2: DOCUMENTS -->
@@ -563,6 +491,16 @@
             </div>
           </div>
         </section>
+
+        <!-- Settings Toggle Button -->
+        <div class="settings-toggle-container"
+          style="display: flex; justify-content: center; align-items: center; margin-top: 1.5rem; margin-bottom: 0.5rem;">
+          <button class="btn btn-secondary icon-btn btn-settings-gear"
+            style="gap: 0.5rem; padding: 0.6rem 1.2rem; border-radius: var(--radius-md);">
+            <i data-lucide="settings"></i>
+            <span>Настройки</span>
+          </button>
+        </div>
       </div>
 
       <!-- VIEW 3: STAFF -->
@@ -734,7 +672,100 @@
             </div>
           </div>
         </section>
+
+        <!-- Settings Toggle Button -->
+        <div class="settings-toggle-container"
+          style="display: flex; justify-content: center; align-items: center; margin-top: 1.5rem; margin-bottom: 0.5rem;">
+          <button class="btn btn-secondary icon-btn btn-settings-gear"
+            style="gap: 0.5rem; padding: 0.6rem 1.2rem; border-radius: var(--radius-md);">
+            <i data-lucide="settings"></i>
+            <span>Настройки</span>
+          </button>
+        </div>
       </div>
+
+      <!-- Bottom Panel: Settings & Data Portability -->
+      <footer class="panel backup-panel hidden" style="margin-top: 0.5rem;">
+        <div class="panel-body footer-settings-body">
+
+          <!-- Left Column: Settings -->
+          <div class="footer-settings-column">
+            <div class="footer-section-header">
+              <i data-lucide="settings" class="text-accent"></i>
+              <h3>Настройки</h3>
+            </div>
+            <div class="footer-settings-controls footer-settings-controls-row" style="flex-wrap: wrap;">
+              <div class="footer-company-group">
+                <label for="header-company-input">Моята фирма</label>
+                <input type="text" id="header-company-input" class="header-company-input"
+                  placeholder="Въведете име на фирма...">
+              </div>
+              <div class="footer-company-group">
+                <label for="api-key-input">Gemini API ключ</label>
+                <div style="display: flex; gap: 0.5rem; align-items: center; width: 100%;">
+                  <input type="password" id="api-key-input" class="header-company-input" placeholder="AIzaSy...">
+                  <span id="api-key-badge" class="badge badge-error" style="height: 38px; width: 38px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); flex-shrink: 0; padding: 0;">
+                    <i data-lucide="circle-x" style="margin: 0; width: 18px; height: 18px;"></i>
+                  </span>
+                </div>
+              </div>
+              <div class="footer-company-group">
+                <label for="cloudconvert-api-key-input">CloudConvert API ключ</label>
+                <div style="display: flex; gap: 0.5rem; align-items: center; width: 100%;">
+                  <input type="password" id="cloudconvert-api-key-input" class="header-company-input" placeholder="Копирайте sk-...">
+                  <span id="cloudconvert-api-key-badge" class="badge badge-error" style="height: 38px; width: 38px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--radius-md); flex-shrink: 0; padding: 0;">
+                    <i data-lucide="circle-x" style="margin: 0; width: 18px; height: 18px;"></i>
+                  </span>
+                </div>
+              </div>
+              <div class="footer-company-group">
+                <label for="cloudconvert-format-select">Конвертирай неподдържани файлове в</label>
+                <select id="cloudconvert-format-select" class="header-company-input">
+                  <option value="pdf">PDF документ</option>
+                  <option value="png">Изображение (PNG)</option>
+                </select>
+              </div>
+              <div class="footer-company-group">
+                <label for="app-pin-input">PIN код за достъп</label>
+                <input type="password" maxlength="10" pattern="[0-9]{4,10}" id="app-pin-input" class="header-company-input" placeholder="1234" autocomplete="new-password">
+              </div>
+              <div class="footer-company-group">
+                <label for="admin-password-input">Администраторска парола за изтриване</label>
+                <input type="password" maxlength="32" id="admin-password-input" class="header-company-input" placeholder="1234" autocomplete="new-password">
+              </div>
+            </div>
+          </div>
+
+          <!-- Divider (desktop only) -->
+          <div class="footer-divider"></div>
+
+          <!-- Right Column: Backup & Restore -->
+          <div class="footer-settings-column">
+            <div class="footer-section-header">
+              <i data-lucide="database-backup" class="text-accent"></i>
+              <h3>Архивиране и възстановяване</h3>
+            </div>
+            <div class="footer-settings-controls">
+              <p class="subtitle"
+                style="font-size: 0.85rem; color: var(--text-secondary); text-align: center; margin-bottom: 0.5rem; line-height: 1.4;">
+                Направете пълно резервно копие на вашите данни или качете архив, за да ги възстановите.
+              </p>
+              <div class="backup-actions">
+                <button id="btn-backup" class="btn btn-secondary">
+                  <i data-lucide="download"></i>
+                  <span>Създай архив (ZIP)</span>
+                </button>
+                <button id="btn-restore" class="btn btn-secondary">
+                  <i data-lucide="upload"></i>
+                  <span>Възстанови от архив (ZIP)</span>
+                </button>
+                <input type="file" id="backup-file-input" accept=".zip" style="display: none;">
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </footer>
 
     </main>
   </div>

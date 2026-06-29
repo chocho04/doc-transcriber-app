@@ -7,19 +7,88 @@ import urllib.parse
 import urllib.error
 import base64
 import time
+import re
+import secrets
 
 PORT = 8080
 
-def convert_to_pdf(filename, base64_data, api_key):
-    print(f"[CloudConvert] Starting conversion job for: {filename}")
-    
+# Maps a data URL MIME type to the file extension used when saving into uploads/.
+MIME_TO_EXT = {
+    'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/pjpeg': 'jpg',
+    'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
+    'application/pdf': 'pdf', 'text/plain': 'txt', 'text/csv': 'csv',
+    'application/rtf': 'rtf', 'text/rtf': 'rtf'
+}
+
+
+def save_uploaded_file(filename, base64_data):
+    """Decodes a base64 data URL and writes it into the local uploads/ folder.
+    Returns the relative URL (e.g. "uploads/invoice_1700000000_ab12cd34.jpg")."""
+    mime = 'application/octet-stream'
+    b64 = base64_data or ''
+    if b64.startswith('data:'):
+        header, _, b64 = b64.partition(',')
+        m = re.match(r'data:([^;]+)', header)
+        if m:
+            mime = m.group(1).lower()
+
+    file_bytes = base64.b64decode(b64)
+    if not file_bytes:
+        raise Exception("Decoded file is empty.")
+
+    # Pick an extension from the MIME type, falling back to the original filename's.
+    ext = MIME_TO_EXT.get(mime)
+    if not ext:
+        ext = os.path.splitext(filename or '')[1].lstrip('.').lower() or 'bin'
+
+    base = os.path.splitext(os.path.basename(filename or 'file'))[0]
+    base = re.sub(r'[^A-Za-z0-9_\-]', '', base) or 'file'
+
+    uploads_dir = os.path.join(os.getcwd(), 'uploads')
+    os.makedirs(uploads_dir, exist_ok=True)
+
+    unique_name = f"{base}_{int(time.time())}_{secrets.token_hex(4)}.{ext}"
+    target = os.path.join(uploads_dir, unique_name)
+    with open(target, 'wb') as f:
+        f.write(file_bytes)
+
+    print(f"[Upload] Saved {len(file_bytes)} bytes -> uploads/{unique_name}")
+    return f"uploads/{unique_name}"
+
+
+def delete_uploaded_file(url):
+    """Deletes a file from the uploads/ folder given its "uploads/<name>" URL.
+    Returns True if a file was actually removed. Path-traversal safe: only the
+    basename inside uploads/ is ever touched."""
+    if not url or not str(url).startswith('uploads/'):
+        raise Exception("Only uploads/ paths can be deleted.")
+    name = os.path.basename(url[len('uploads/'):].replace('\\', '/'))
+    if not name or name in ('.', '..'):
+        raise Exception("Invalid filename.")
+
+    uploads_dir = os.path.realpath(os.path.join(os.getcwd(), 'uploads'))
+    target = os.path.realpath(os.path.join(uploads_dir, name))
+    if os.path.dirname(target) != uploads_dir:
+        raise Exception("Path escapes the uploads folder.")
+
+    if os.path.isfile(target):
+        os.remove(target)
+        print(f"[Delete] Removed {url}")
+        return True
+    print(f"[Delete] Not found (already gone): {url}")
+    return False
+
+
+def convert_file(filename, base64_data, api_key, output_format='pdf'):
+    print(f"[CloudConvert] Starting conversion job for: {filename} -> {output_format}")
+
     # 1. Create a job
     url = "https://api.cloudconvert.com/v2/jobs"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
-    
+
     payload = {
         "tasks": {
             "import-1": {
@@ -28,7 +97,7 @@ def convert_to_pdf(filename, base64_data, api_key):
             "convert-1": {
                 "operation": "convert",
                 "input": "import-1",
-                "output_format": "pdf"
+                "output_format": output_format
             },
             "export-1": {
                 "operation": "export/url",
@@ -127,20 +196,21 @@ def convert_to_pdf(filename, base64_data, api_key):
         print("[CloudConvert Error] Job timed out.")
         raise Exception("CloudConvert Job timed out or output URL not found.")
         
-    # 5. Download the converted PDF and return it as base64
-    print("[CloudConvert] Downloading converted PDF...")
+    # 5. Download the converted file and return it as a base64 data URL
+    print("[CloudConvert] Downloading converted file...")
     pdf_req = urllib.request.Request(pdf_url, method='GET')
     try:
         with urllib.request.urlopen(pdf_req) as resp:
             pdf_bytes = resp.read()
     except urllib.error.HTTPError as e:
         err_info = e.read().decode('utf-8')
-        print(f"[CloudConvert Error] Downloading PDF failed: {err_info}")
-        raise Exception(f"Failed to download PDF from CloudConvert: {err_info}")
-        
-    pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+        print(f"[CloudConvert Error] Downloading file failed: {err_info}")
+        raise Exception(f"Failed to download converted file from CloudConvert: {err_info}")
+
+    out_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+    mime = 'image/png' if output_format == 'png' else 'application/pdf'
     print("[CloudConvert] Conversion finished successfully.")
-    return f"data:application/pdf;base64,{pdf_base64}"
+    return f"data:{mime};base64,{out_base64}"
 
 
 class MyHandler(http.server.BaseHTTPRequestHandler):
@@ -178,9 +248,14 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
                 '.jpg': 'image/jpeg',
                 '.jpeg': 'image/jpeg',
                 '.gif': 'image/gif',
+                '.webp': 'image/webp',
                 '.svg': 'image/svg+xml',
                 '.ico': 'image/x-icon',
-                '.json': 'application/json; charset=utf-8'
+                '.json': 'application/json; charset=utf-8',
+                '.pdf': 'application/pdf',
+                '.txt': 'text/plain; charset=utf-8',
+                '.csv': 'text/csv; charset=utf-8',
+                '.rtf': 'application/rtf'
             }.get(ext, 'application/octet-stream')
             
             self.send_header('Content-Type', content_type)
@@ -198,10 +273,61 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
-        
+
+        # ----- File upload: save the posted file into the uploads/ folder -----
+        if path == '/api/upload-file':
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+                filename = data.get('filename')
+                base64_data = data.get('base64Data')
+                if not base64_data:
+                    raise Exception("Missing base64Data in upload request.")
+
+                url = save_uploaded_file(filename, base64_data)
+                response_bytes = json.dumps({'success': True, 'url': url}).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(response_bytes)))
+                self.end_headers()
+                self.wfile.write(response_bytes)
+            except Exception as e:
+                print(f"[Upload Error] {str(e)}")
+                response_bytes = json.dumps({'success': False, 'error': str(e)}).encode('utf-8')
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(response_bytes)))
+                self.end_headers()
+                self.wfile.write(response_bytes)
+            return
+
+        # ----- File delete: remove a file from the uploads/ folder -----
+        if path == '/api/delete-file':
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+                deleted = delete_uploaded_file(data.get('url'))
+                response_bytes = json.dumps({'success': True, 'deleted': deleted}).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(response_bytes)))
+                self.end_headers()
+                self.wfile.write(response_bytes)
+            except Exception as e:
+                print(f"[Delete Error] {str(e)}")
+                response_bytes = json.dumps({'success': False, 'error': str(e)}).encode('utf-8')
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(response_bytes)))
+                self.end_headers()
+                self.wfile.write(response_bytes)
+            return
+
         # Accept all typical routes for compatibility
         valid_routes = ['/api/convert-doc', '/api/convert-rtf', '/api/convert-xls', '/api/convert-to-pdf']
-        
+
         if path in valid_routes:
             content_length = int(self.headers.get('Content-Length', 0))
             post_data = self.rfile.read(content_length)
@@ -213,11 +339,16 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
                 
                 # Retrieve CloudConvert API Key from the frontend payload
                 api_key = data.get('cloudConvertApiKey')
-                
+
                 if not api_key:
                     raise Exception("CloudConvert API Key is not configured. Please configure it in Settings.")
-                
-                pdf_base64_url = convert_to_pdf(filename, base64_data, api_key)
+
+                # Target format chosen in Settings: 'pdf' (default) or 'png' image
+                output_format = data.get('outputFormat', 'pdf')
+                if output_format not in ('pdf', 'png'):
+                    output_format = 'pdf'
+
+                pdf_base64_url = convert_file(filename, base64_data, api_key, output_format)
                 
                 response_obj = {
                     'success': True,

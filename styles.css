@@ -267,6 +267,28 @@ body {
   box-shadow: 0 0 0 3px rgb(0 210 255 / 15%);
 }
 
+/* The <select> variant (e.g. PDF/Image conversion toggle) needs an explicit
+   themed background — a transparent select and its native option list render
+   white in dark mode. Also swap the native arrow for a themed chevron. */
+select.header-company-input {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  cursor: pointer;
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+  background-size: 1rem;
+  padding-right: 2rem;
+}
+
+select.header-company-input option {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
 /* Modal Select Dropdown */
 .modal-select {
   width: 100%;
