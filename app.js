@@ -12,6 +12,7 @@
       'saved_unattached_staff_docs',
       'gemini_api_key',
       'cloudconvert_api_key',
+      'cloudconvert_format',
       'my_company_name',
       'app_access_pin',
       'theme'
@@ -23,18 +24,110 @@
   };
 })();
 
+function checkIsImage(url) {
+  if (!url) return false;
+  return url.startsWith('data:image/') || /\.(jpg|jpeg|png|gif|webp)$/i.test(url);
+}
+function checkIsPdf(url) {
+  if (!url) return false;
+  return url.startsWith('data:application/pdf') || /\.pdf$/i.test(url);
+}
+function checkIsText(url) {
+  if (!url) return false;
+  return url.startsWith('data:text/') || url.startsWith('data:application/rtf') || /\.(txt|rtf)$/i.test(url);
+}
+
+async function uploadFileToServer(base64Data, filename) {
+  if (!base64Data || !base64Data.startsWith('data:')) {
+    return base64Data;
+  }
+  const apiEndpoint = window.location.protocol === 'file:'
+    ? 'http://127.0.0.1:8080/api/upload-file'
+    : 'api/upload-file';
+  try {
+    const response = await fetch(apiEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ base64Data, filename })
+    });
+    if (!response.ok) {
+      throw new Error(`Upload status ${response.status}`);
+    }
+    const result = await response.json();
+    if (result && result.success && result.url) {
+      return result.url;
+    }
+    throw new Error(result.error || 'Unknown upload response');
+  } catch (err) {
+    console.warn("File upload failed, falling back to local base64:", err);
+    return base64Data;
+  }
+}
+
 function syncToDatabase(key, value) {
   const route = 'api/save-state';
   const apiEndpoint = window.location.protocol === 'file:'
     ? `http://127.0.0.1:8080/${route}`
     : route;
 
+  // For document arrays, strip large base64 image/file data before syncing.
+  // This keeps payloads small enough to pass through server firewalls (ModSecurity, etc).
+  // Images remain safely stored in localStorage on the client.
+  const keysWithImages = [
+    'saved_documents', 'saved_general_documents', 'saved_staff',
+    'saved_staff_general_documents', 'saved_unattached_staff_docs'
+  ];
+  
+  let syncValue = value;
+  if (keysWithImages.includes(key)) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        const stripped = parsed.map(item => {
+          const clone = { ...item };
+          // Strip base64 image/file data (starts with "data:")
+          if (typeof clone.image === 'string' && clone.image.startsWith('data:')) {
+            clone.image = '[stored_locally]';
+          }
+          // Strip nested file arrays (staff docs, general docs with attachments)
+          if (Array.isArray(clone.documents)) {
+            clone.documents = clone.documents.map(subDoc => {
+              const subClone = { ...subDoc };
+              if (typeof subClone.image === 'string' && subClone.image.startsWith('data:')) {
+                subClone.image = '[stored_locally]';
+              }
+              return subClone;
+            });
+          }
+          if (Array.isArray(clone.files)) {
+            clone.files = clone.files.map(f => {
+              const fClone = { ...f };
+              if (typeof fClone.data === 'string' && fClone.data.startsWith('data:')) {
+                fClone.data = '[stored_locally]';
+              }
+              if (typeof fClone.image === 'string' && fClone.image.startsWith('data:')) {
+                fClone.image = '[stored_locally]';
+              }
+              return fClone;
+            });
+          }
+          return clone;
+        });
+        syncValue = JSON.stringify(stripped);
+      }
+    } catch (e) {
+      // If JSON parse fails, send original value
+    }
+  }
+
   fetch(apiEndpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ key, value })
+    body: JSON.stringify({ key, value: syncValue })
   })
   .then(async response => {
     if (!response.ok) {
@@ -47,9 +140,6 @@ function syncToDatabase(key, value) {
       } catch (e) {}
       
       console.warn(`Database sync failed for key ${key}: ${errMsg}`);
-      if (typeof showToast === 'function') {
-        showToast(`Грешка при синхронизация: ${errMsg}`, 'alert-triangle');
-      }
     }
   })
   .catch(err => {
@@ -72,22 +162,28 @@ async function preloadStateFromDatabase() {
     if (result && result.success && result.data) {
       state.isSyncingSuspended = true;
       
+      // Merge strategy: only apply server values for keys where local storage is empty.
+      // This prevents stale server data from overwriting newer local data after a failed sync.
       for (const [key, value] of Object.entries(result.data)) {
         if (value !== null && value !== undefined) {
-          localStorage.setItem(key, value);
+          const localValue = localStorage.getItem(key);
+          if (!localValue || localValue === '[]' || localValue === '{}' || localValue === '') {
+            localStorage.setItem(key, value);
+          }
         }
       }
       
-      // Update memory state properties from the loaded database values
-      if (result.data['gemini_api_key'] !== undefined) state.apiKey = result.data['gemini_api_key'] || '';
-      if (result.data['cloudconvert_api_key'] !== undefined) state.cloudConvertApiKey = result.data['cloudconvert_api_key'] || '';
-      if (result.data['saved_documents'] !== undefined) state.documents = JSON.parse(result.data['saved_documents']) || [];
-      if (result.data['saved_general_documents'] !== undefined) state.generalDocs = JSON.parse(result.data['saved_general_documents']) || [];
-      if (result.data['saved_staff'] !== undefined) state.staff = JSON.parse(result.data['saved_staff']) || [];
-      if (result.data['saved_unattached_staff_docs'] !== undefined) state.unattachedStaffDocs = JSON.parse(result.data['saved_unattached_staff_docs']) || [];
-      if (result.data['saved_staff_general_documents'] !== undefined) state.staffGeneralDocs = JSON.parse(result.data['saved_staff_general_documents']) || [];
-      if (result.data['my_company_name'] !== undefined) state.myCompany = result.data['my_company_name'] || '';
-      if (result.data['theme'] !== undefined) state.theme = result.data['theme'] || 'dark';
+      // Update memory state properties from localStorage (which now has the merged result)
+      state.apiKey = localStorage.getItem('gemini_api_key') || '';
+      state.cloudConvertApiKey = localStorage.getItem('cloudconvert_api_key') || '';
+      state.cloudConvertFormat = localStorage.getItem('cloudconvert_format') || 'pdf';
+      state.documents = JSON.parse(localStorage.getItem('saved_documents')) || [];
+      state.generalDocs = JSON.parse(localStorage.getItem('saved_general_documents')) || [];
+      state.staff = JSON.parse(localStorage.getItem('saved_staff')) || [];
+      state.unattachedStaffDocs = JSON.parse(localStorage.getItem('saved_unattached_staff_docs')) || [];
+      state.staffGeneralDocs = JSON.parse(localStorage.getItem('saved_staff_general_documents')) || [];
+      state.myCompany = localStorage.getItem('my_company_name') || '';
+      state.theme = localStorage.getItem('theme') || 'dark';
       
       state.isSyncingSuspended = false;
     }
@@ -100,6 +196,7 @@ async function preloadStateFromDatabase() {
 let state = {
   apiKey: localStorage.getItem('gemini_api_key') || '',
   cloudConvertApiKey: localStorage.getItem('cloudconvert_api_key') || '',
+  cloudConvertFormat: localStorage.getItem('cloudconvert_format') || 'pdf',
   documents: JSON.parse(localStorage.getItem('saved_documents')) || [],
   generalDocs: JSON.parse(localStorage.getItem('saved_general_documents')) || [],
   staff: JSON.parse(localStorage.getItem('saved_staff')) || [],
@@ -309,6 +406,7 @@ const elements = {
   apiKeyInput: document.getElementById('api-key-input'),
   cloudConvertApiKeyInput: document.getElementById('cloudconvert-api-key-input'),
   cloudConvertApiKeyBadge: document.getElementById('cloudconvert-api-key-badge'),
+  cloudConvertFormatSelect: document.getElementById('cloudconvert-format-select'),
   appPinInput: document.getElementById('app-pin-input'),
   
   // Lightbox Modal
@@ -377,6 +475,9 @@ function init() {
   }
   if (elements.cloudConvertApiKeyInput) {
     elements.cloudConvertApiKeyInput.value = state.cloudConvertApiKey;
+  }
+  if (elements.cloudConvertFormatSelect) {
+    elements.cloudConvertFormatSelect.value = state.cloudConvertFormat;
   }
   if (elements.appPinInput) {
     elements.appPinInput.value = localStorage.getItem('app_access_pin') || '1234';
@@ -878,7 +979,7 @@ Rules:
       };
     }
     
-    saveTranscription(parsedResult);
+    await saveTranscription(parsedResult);
     showToast('Документът е транскрибиран успешно!', 'check-circle');
     resetPreview();
     if (!isBatch) {
@@ -992,7 +1093,7 @@ Rules:
       };
     }
     
-    saveGeneralDocTranscription(parsedResult);
+    await saveGeneralDocTranscription(parsedResult);
     showToast('Документът е анализиран успешно!', 'check-circle');
     resetPreviewDocs();
     if (!isBatch) {
@@ -1099,7 +1200,7 @@ Rules:
       };
     }
     
-    saveStaffDocTranscription(parsedResult);
+    await saveStaffDocTranscription(parsedResult);
     showToast('Документът е анализиран успешно!', 'check-circle');
     resetPreviewStaff();
     if (!isBatch) {
@@ -1200,7 +1301,7 @@ function rotateImage90DegreesStaff() {
 }
 
 function handleFileDocs(file) {
-  if (shouldConvertToPdf(file)) {
+  if (shouldConvertFile(file)) {
     elements.imagePreviewDocs.src = '';
     elements.imagePreviewDocs.classList.add('hidden');
     elements.btnRotatePreviewDocs.classList.add('hidden');
@@ -1213,13 +1314,15 @@ function handleFileDocs(file) {
     const placeholder = document.createElement('div');
     placeholder.id = 'pdf-preview-placeholder-docs';
     placeholder.className = 'document-preview-placeholder';
+    const targetFormat = state.cloudConvertFormat || 'pdf';
+    const formatLabel = targetFormat.toUpperCase();
     placeholder.innerHTML = `
       <div class="doc-placeholder-icon">
         <i data-lucide="loader-2" class="animate-spin"></i>
       </div>
       <div class="doc-placeholder-info">
         <div class="doc-placeholder-name" title="${escapeHTML(file.name)}">${escapeHTML(file.name)}</div>
-        <div class="doc-placeholder-size">Конвертиране в PDF...</div>
+        <div class="doc-placeholder-size">Конвертиране в ${formatLabel}...</div>
       </div>
     `;
     
@@ -1231,9 +1334,9 @@ function handleFileDocs(file) {
       window.lucide.createIcons();
     }
     
-    convertFileToPdf(file)
-      .then(pdfFile => {
-        handleFileDocs(pdfFile);
+    convertFile(file)
+      .then(convertedFile => {
+        handleFileDocs(convertedFile);
       })
       .catch(err => {
         const formatName = file.name.substring(file.name.lastIndexOf('.')).toUpperCase().substring(1);
@@ -1329,7 +1432,7 @@ function handleFileDocs(file) {
 }
 
 function handleFileStaff(file) {
-  if (shouldConvertToPdf(file)) {
+  if (shouldConvertFile(file)) {
     elements.imagePreviewStaff.src = '';
     elements.imagePreviewStaff.classList.add('hidden');
     elements.btnRotatePreviewStaff.classList.add('hidden');
@@ -1342,13 +1445,15 @@ function handleFileStaff(file) {
     const placeholder = document.createElement('div');
     placeholder.id = 'pdf-preview-placeholder-staff';
     placeholder.className = 'document-preview-placeholder';
+    const targetFormat = state.cloudConvertFormat || 'pdf';
+    const formatLabel = targetFormat.toUpperCase();
     placeholder.innerHTML = `
       <div class="doc-placeholder-icon">
         <i data-lucide="loader-2" class="animate-spin"></i>
       </div>
       <div class="doc-placeholder-info">
         <div class="doc-placeholder-name" title="${escapeHTML(file.name)}">${escapeHTML(file.name)}</div>
-        <div class="doc-placeholder-size">Конвертиране в PDF...</div>
+        <div class="doc-placeholder-size">Конвертиране в ${formatLabel}...</div>
       </div>
     `;
     
@@ -1360,9 +1465,9 @@ function handleFileStaff(file) {
       window.lucide.createIcons();
     }
     
-    convertFileToPdf(file)
-      .then(pdfFile => {
-        handleFileStaff(pdfFile);
+    convertFile(file)
+      .then(convertedFile => {
+        handleFileStaff(convertedFile);
       })
       .catch(err => {
         const formatName = file.name.substring(file.name.lastIndexOf('.')).toUpperCase().substring(1);
@@ -1461,14 +1566,14 @@ function handleFileStaff(file) {
 // Data Persistence (localStorage)
 // ==========================================
 
-function saveTranscription(parsedResult) {
+async function saveTranscription(parsedResult) {
   const name = state.capturedFileName || 'Untitled Document';
   
   // Classify based on uploader name, supplier details, or inferred type
   const isInvoiceKeyword = name.toLowerCase().includes('фактура') || 
                             (parsedResult.supplier && parsedResult.supplier.toLowerCase().includes('фактура'));
   
-  const isTaxesKeyword = name.toLowerCase().match(/(данък|осигуровки|данъци|ддс декларация|нп|tax|social security|insurance)/) ||
+  const isTaxesKeyword = name.toLowerCase().match(/(danък|осигуровки|данъци|ддс декларация|нп|tax|social security|insurance)/) ||
                          (parsedResult.supplier && parsedResult.supplier.toLowerCase().match(/(данък|осигуровки|данъци|ддс декларация|нп|tax|social security|insurance)/));
                              
   const isBillsKeyword = name.toLowerCase().match(/(ток|вода|интернет|парно|телефон|сметка|сметки|битова|услуга|услуги|такса|такси|а1|виваком|йеттел|yettel|vivacom|електрохолд|evn|енерго|софийска вода|bill|utility|utilities|service|services)/) ||
@@ -1493,6 +1598,9 @@ function saveTranscription(parsedResult) {
     finalType = 'revenue-invoice';
   }
   
+  // Upload base64 image to server first, if available
+  const imageUrl = await uploadFileToServer(state.capturedImageBase64, state.capturedFileName || 'invoice.jpg');
+  
   const newDoc = {
     id: 'doc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
     name: name,
@@ -1502,7 +1610,7 @@ function saveTranscription(parsedResult) {
     products: parsedResult.products || [],
     totalAmount: parsedResult.totalAmount != null ? parseFloat(parsedResult.totalAmount) : null,
     type: finalType,
-    image: state.capturedImageBase64,
+    image: imageUrl,
     timestamp: Date.now()
   };
   
@@ -1526,14 +1634,17 @@ function saveTranscription(parsedResult) {
   renderDocumentList();
 }
 
-function saveGeneralDocTranscription(parsedResult) {
+async function saveGeneralDocTranscription(parsedResult) {
   const name = parsedResult.name || state.capturedFileNameDocs || 'Untitled Document';
+  
+  // Upload base64 image to server first, if available
+  const imageUrl = await uploadFileToServer(state.capturedImageBase64Docs, state.capturedFileNameDocs || 'document.jpg');
   
   const newDoc = {
     id: 'gdoc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
     name: name,
     type: parsedResult.type || 'other',
-    image: state.capturedImageBase64Docs,
+    image: imageUrl,
     issueDate: normalizeDate(parsedResult.issueDate) || new Date().toISOString().slice(0, 10),
     expiryDate: normalizeDate(parsedResult.expiryDate),
     supplier: parsedResult.supplier || null,
@@ -1557,10 +1668,13 @@ function saveGeneralDocTranscription(parsedResult) {
   renderGeneralDocumentList();
 }
 
-function saveStaffDocTranscription(parsedResult) {
+async function saveStaffDocTranscription(parsedResult) {
   const category = parsedResult.docCategory || 'other';
   const docName = parsedResult.docName || state.capturedFileNameStaff || 'Документ';
   const issueDate = normalizeDate(parsedResult.issueDate) || new Date().toISOString().slice(0, 10);
+  
+  // Upload base64 image to server first, if available
+  const imageUrl = await uploadFileToServer(state.capturedImageBase64Staff, state.capturedFileNameStaff || 'staff_doc.jpg');
   
   if (category === 'payroll' || category === 'schedule' || (category === 'other' && !parsedResult.employeeName)) {
     // Save to general staff documents
@@ -1568,7 +1682,7 @@ function saveStaffDocTranscription(parsedResult) {
       id: 'sgdoc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
       name: docName,
       type: category, // 'payroll', 'schedule', 'other'
-      image: state.capturedImageBase64Staff,
+      image: imageUrl,
       date: issueDate,
       timestamp: Date.now()
     };
@@ -1595,7 +1709,7 @@ function saveStaffDocTranscription(parsedResult) {
   const newSubDoc = {
     id: 'sdoc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
     name: docName,
-    image: state.capturedImageBase64Staff,
+    image: imageUrl,
     uploadDate: issueDate,
     fullText: parsedResult.fullText || ''
   };
@@ -1630,7 +1744,7 @@ function saveStaffDocTranscription(parsedResult) {
     const unattachedDoc = {
       id: 'udoc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
       name: docName,
-      image: state.capturedImageBase64Staff,
+      image: imageUrl,
       uploadDate: issueDate,
       extractedName: employeeName,
       extractedPosition: parsedResult.employeePosition ? parsedResult.employeePosition.trim() : '',
@@ -2029,7 +2143,7 @@ function renderDocumentList() {
     const dateValue = normalizeDate(doc.date);
     const amountValue = doc.totalAmount != null ? Number(doc.totalAmount).toFixed(2) : '';
     
-    const isImage = doc.image && doc.image.startsWith('data:image/');
+    const isImage = checkIsImage(doc.image);
     const linkIcon = isImage ? 'image' : 'file-text';
     const linkLabel = isImage ? 'Снимка' : 'Файл';
     
@@ -2189,7 +2303,7 @@ function renderExpiringDocuments() {
     item.dataset.id = doc.id;
 
     const expiryDateVal = normalizeDate(doc.expiryDate);
-    const isImage = doc.image && doc.image.startsWith('data:image/');
+    const isImage = checkIsImage(doc.image);
     const linkIcon = isImage ? 'image' : 'file-text';
     const linkLabel = isImage ? 'Снимка' : 'Файл';
     const typeLabel = doc.type === 'permit' ? 'Разрешително' : 'Договор';
@@ -2402,7 +2516,7 @@ function renderGeneralDocumentList() {
     const issueDateVal = normalizeDate(doc.issueDate);
     const expiryDateVal = normalizeDate(doc.expiryDate);
     
-    const isImage = doc.image && doc.image.startsWith('data:image/');
+    const isImage = checkIsImage(doc.image);
     const linkIcon = isImage ? 'image' : 'file-text';
     const linkLabel = isImage ? 'Снимка' : 'Файл';
     
@@ -2977,7 +3091,7 @@ function renderStaffGeneralDocsList() {
     item.dataset.id = doc.id;
     
     const docDateVal = normalizeDate(doc.date) || new Date().toISOString().slice(0, 10);
-    const isImage = doc.image && doc.image.startsWith('data:image/');
+    const isImage = checkIsImage(doc.image);
     const linkIcon = isImage ? 'image' : 'file-text';
     const linkLabel = isImage ? 'Снимка' : 'Файл';
     
@@ -3147,7 +3261,7 @@ function renderStaffPersonDocs(person, docsList) {
     docRow.className = 'staff-doc-row';
     docRow.dataset.id = doc.id;
     
-    const isImage = doc.image && doc.image.startsWith('data:image/');
+    const isImage = checkIsImage(doc.image);
     const linkIcon = isImage ? 'image' : 'file-text';
     const uploadDateFormatted = normalizeDate(doc.uploadDate);
     
@@ -3247,7 +3361,7 @@ function openGeneralDocDetailsModal(doc) {
     if (elements.containerViewDocProducts) elements.containerViewDocProducts.classList.add('hidden');
   }
   
-  const isImage = doc.image && doc.image.startsWith('data:image/');
+  const isImage = checkIsImage(doc.image);
   
   if (isImage) {
     elements.modalDocPreviewImg.src = doc.image;
@@ -3460,7 +3574,7 @@ function openDocDetailsModal(doc) {
     existingModalPlaceholder.remove();
   }
   
-  const isImage = doc.image && doc.image.startsWith('data:image/');
+  const isImage = checkIsImage(doc.image);
   
   if (doc.image) {
     elements.btnViewExpand.classList.remove('hidden');
@@ -3634,6 +3748,17 @@ function updateApiKeyBadge() {
   if (window.lucide) window.lucide.createIcons();
 }
 
+function showSettingsPanelAndFocusKey() {
+  if (elements.backupPanel) {
+    elements.backupPanel.classList.remove('hidden');
+  }
+  if (elements.apiKeyInput) {
+    elements.apiKeyInput.focus();
+    elements.apiKeyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  showToast('Моля, конфигурирайте първо вашия Gemini API ключ.', 'key');
+}
+
 function updateCloudConvertApiKeyBadge() {
   const isKeyConfigured = state.cloudConvertApiKey && state.cloudConvertApiKey.length > 10;
   
@@ -3648,17 +3773,6 @@ function updateCloudConvertApiKeyBadge() {
   }
   
   if (window.lucide) window.lucide.createIcons();
-}
-
-function showSettingsPanelAndFocusKey() {
-  if (elements.backupPanel) {
-    elements.backupPanel.classList.remove('hidden');
-  }
-  if (elements.apiKeyInput) {
-    elements.apiKeyInput.focus();
-    elements.apiKeyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
-  showToast('Моля, конфигурирайте първо вашия Gemini API ключ.', 'key');
 }
 
 function showSettingsPanelAndFocusCloudConvertKey() {
@@ -3735,49 +3849,68 @@ function openFileInModal(base64DataUrl, fileName) {
   
   caption.textContent = fileName;
   
-  const isImage = base64DataUrl && base64DataUrl.startsWith('data:image/');
-  const isPdf = base64DataUrl && base64DataUrl.startsWith('data:application/pdf');
-  const isText = base64DataUrl && (base64DataUrl.startsWith('data:text/') || base64DataUrl.startsWith('data:application/rtf'));
+  const isImage = base64DataUrl && checkIsImage(base64DataUrl);
+  const isPdf = base64DataUrl && checkIsPdf(base64DataUrl);
+  const isText = base64DataUrl && checkIsText(base64DataUrl);
   
   if (isImage) {
     img.src = base64DataUrl;
     img.classList.remove('hidden');
   } else if (isPdf) {
-    try {
-      const parts = base64DataUrl.split(';base64,');
-      const contentType = parts[0].split(':')[1];
-      const raw = window.atob(parts[1]);
-      const rawLength = raw.length;
-      const uInt8Array = new Uint8Array(rawLength);
-      for (let i = 0; i < rawLength; ++i) {
-        uInt8Array[i] = raw.charCodeAt(i);
+    if (base64DataUrl.startsWith('data:')) {
+      try {
+        const parts = base64DataUrl.split(';base64,');
+        const contentType = parts[0].split(':')[1];
+        const raw = window.atob(parts[1]);
+        const rawLength = raw.length;
+        const uInt8Array = new Uint8Array(rawLength);
+        for (let i = 0; i < rawLength; ++i) {
+          uInt8Array[i] = raw.charCodeAt(i);
+        }
+        const blob = new Blob([uInt8Array], { type: contentType });
+        activeLightboxBlobUrl = URL.createObjectURL(blob);
+        
+        iframe.src = activeLightboxBlobUrl;
+        iframe.classList.remove('hidden');
+      } catch (e) {
+        console.error("Failed to render PDF in iframe", e);
+        iframe.src = base64DataUrl;
+        iframe.classList.remove('hidden');
       }
-      const blob = new Blob([uInt8Array], { type: contentType });
-      activeLightboxBlobUrl = URL.createObjectURL(blob);
-      
-      iframe.src = activeLightboxBlobUrl;
-      iframe.classList.remove('hidden');
-    } catch (e) {
-      console.error("Failed to render PDF in iframe", e);
+    } else {
       iframe.src = base64DataUrl;
       iframe.classList.remove('hidden');
     }
   } else if (isText) {
-    try {
-      const parts = base64DataUrl.split(';base64,');
-      const decodedText = decodeURIComponent(escape(window.atob(parts[1])));
-      textContainer.textContent = decodedText;
-      textContainer.classList.remove('hidden');
-    } catch (e) {
+    if (base64DataUrl.startsWith('data:')) {
       try {
         const parts = base64DataUrl.split(';base64,');
-        const decodedText = window.atob(parts[1]);
+        const decodedText = decodeURIComponent(escape(window.atob(parts[1])));
         textContainer.textContent = decodedText;
         textContainer.classList.remove('hidden');
-      } catch (err) {
-        textContainer.textContent = "Неуспешно зареждане на текстовия файл.";
-        textContainer.classList.remove('hidden');
+      } catch (e) {
+        try {
+          const parts = base64DataUrl.split(';base64,');
+          const decodedText = window.atob(parts[1]);
+          textContainer.textContent = decodedText;
+          textContainer.classList.remove('hidden');
+        } catch (err) {
+          textContainer.textContent = "Неуспешно зареждане на текстовия файл.";
+          textContainer.classList.remove('hidden');
+        }
       }
+    } else {
+      // Fetch text from server
+      fetch(base64DataUrl)
+        .then(r => r.text())
+        .then(txt => {
+          textContainer.textContent = txt;
+          textContainer.classList.remove('hidden');
+        })
+        .catch(err => {
+          textContainer.textContent = "Неуспешно зареждане на текстовия файл.";
+          textContainer.classList.remove('hidden');
+        });
     }
   } else {
     // Show download button fallback
@@ -3981,6 +4114,17 @@ function setupEventListeners() {
       updateCloudConvertApiKeyBadge();
     });
   }
+
+  // Real-time CloudConvert Target Format Selection Sync
+  if (elements.cloudConvertFormatSelect) {
+    elements.cloudConvertFormatSelect.addEventListener('change', (e) => {
+      const format = e.target.value;
+      state.cloudConvertFormat = format;
+      localStorage.setItem('cloudconvert_format', format);
+    });
+  }
+
+
 
   // Real-time Access PIN Sync & Validation
   if (elements.appPinInput) {
@@ -4457,7 +4601,7 @@ function setupEventListeners() {
     if (target) {
       const id = target.dataset.id;
       const doc = state.documents.find(d => d.id === id);
-      if (doc && doc.image && doc.image.startsWith('data:image/')) {
+      if (doc && doc.image && checkIsImage(doc.image)) {
         elements.hoverPreviewImg.src = doc.image;
         elements.hoverPreview.classList.remove('hidden');
       }
@@ -4924,7 +5068,7 @@ function setupEventListeners() {
       if (target) {
         const id = target.dataset.id;
         const doc = state.generalDocs.find(d => d.id === id);
-        if (doc && doc.image && doc.image.startsWith('data:image/')) {
+        if (doc && doc.image && checkIsImage(doc.image)) {
           elements.hoverPreviewImg.src = doc.image;
           elements.hoverPreview.classList.remove('hidden');
         }
@@ -5440,18 +5584,19 @@ function readFileAsDataURL(file) {
 }
 
 /**
- * Converts a local RTF or DOC File object to a PDF File object using the dev server API.
- * @param {File} file - The File object (.rtf or .doc).
- * @returns {Promise<File>} - Resolves with the converted PDF File object.
+ * Checks if a file has an unsupported extension that requires conversion.
  */
-function shouldConvertToPdf(file) {
+function shouldConvertFile(file) {
   if (!file || !file.name) return false;
   const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-  const convertFormats = ['.rtf', '.doc', '.xls', '.ppt', '.pptx', '.odt', '.ods', '.odp'];
+  const convertFormats = ['.rtf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp'];
   return convertFormats.includes(ext);
 }
 
-async function convertFileToPdf(file) {
+/**
+ * Converts a document to target format (pdf or png) using the server API.
+ */
+async function convertFile(file) {
   const apiKey = (state.cloudConvertApiKey || '').trim();
   if (!apiKey) {
     showSettingsPanelAndFocusCloudConvertKey();
@@ -5460,6 +5605,7 @@ async function convertFileToPdf(file) {
   }
 
   const base64Data = await readFileAsDataURL(file);
+  const targetFormat = state.cloudConvertFormat || 'pdf';
   
   const apiEndpoint = window.location.protocol === 'file:'
     ? `http://127.0.0.1:8080/api/convert-to-pdf`
@@ -5473,7 +5619,8 @@ async function convertFileToPdf(file) {
     body: JSON.stringify({
       filename: file.name,
       base64Data: base64Data,
-      cloudConvertApiKey: apiKey
+      cloudConvertApiKey: apiKey,
+      targetFormat: targetFormat
     })
   });
   
@@ -5491,9 +5638,9 @@ async function convertFileToPdf(file) {
     throw new Error(result.error || 'Неизвестна грешка при конвертирането.');
   }
   
-  const pdfBase64 = result.base64Data;
-  const parts = pdfBase64.split(';base64,');
-  const contentType = parts[0].split(':')[1] || 'application/pdf';
+  const convertedBase64 = result.base64Data;
+  const parts = convertedBase64.split(';base64,');
+  const contentType = parts[0].split(':')[1] || (targetFormat === 'png' ? 'image/png' : 'application/pdf');
   const byteCharacters = atob(parts[1]);
   const byteNumbers = new Array(byteCharacters.length);
   for (let i = 0; i < byteCharacters.length; i++) {
@@ -5504,10 +5651,12 @@ async function convertFileToPdf(file) {
   
   const lastDotIndex = file.name.lastIndexOf('.');
   const baseName = lastDotIndex !== -1 ? file.name.substring(0, lastDotIndex) : file.name;
-  const pdfName = `${baseName}.pdf`;
+  const outputName = `${baseName}.${targetFormat}`;
   
-  return new File([blob], pdfName, { type: 'application/pdf' });
+  return new File([blob], outputName, { type: contentType });
 }
+
+
 
 
 /**
@@ -5572,10 +5721,12 @@ async function processMultipleFiles(files, viewType) {
 
     try {
       let fileToProcess = file;
-      if (shouldConvertToPdf(file)) {
+      if (shouldConvertFile(file)) {
+        const targetFormat = state.cloudConvertFormat || 'pdf';
+        const formatLabel = targetFormat.toUpperCase();
         btnElement.innerHTML = `<i data-lucide="loader-2" class="animate-spin"></i> <span>Конвертиране ${fileNum}/${total}: ${escapeHTML(file.name.length > 15 ? file.name.substring(0, 12) + '...' : file.name)}</span>`;
         if (window.lucide) window.lucide.createIcons();
-        fileToProcess = await convertFileToPdf(file);
+        fileToProcess = await convertFile(file);
         
         btnElement.innerHTML = `<i data-lucide="loader-2" class="animate-spin"></i> <span>Файл ${fileNum}/${total}: ${escapeHTML(fileToProcess.name.length > 25 ? fileToProcess.name.substring(0, 22) + '...' : fileToProcess.name)}</span>`;
         if (window.lucide) window.lucide.createIcons();
@@ -5623,7 +5774,7 @@ async function processMultipleFiles(files, viewType) {
 
 // File Reader Helper
 function handleFile(file) {
-  if (shouldConvertToPdf(file)) {
+  if (shouldConvertFile(file)) {
     elements.imagePreview.src = '';
     elements.imagePreview.classList.add('hidden');
     elements.btnRotatePreview.classList.add('hidden');
@@ -5636,13 +5787,15 @@ function handleFile(file) {
     const placeholder = document.createElement('div');
     placeholder.id = 'pdf-preview-placeholder';
     placeholder.className = 'document-preview-placeholder';
+    const targetFormat = state.cloudConvertFormat || 'pdf';
+    const formatLabel = targetFormat.toUpperCase();
     placeholder.innerHTML = `
       <div class="doc-placeholder-icon">
         <i data-lucide="loader-2" class="animate-spin"></i>
       </div>
       <div class="doc-placeholder-info">
         <div class="doc-placeholder-name" title="${escapeHTML(file.name)}">${escapeHTML(file.name)}</div>
-        <div class="doc-placeholder-size">Конвертиране в PDF...</div>
+        <div class="doc-placeholder-size">Конвертиране в ${formatLabel}...</div>
       </div>
     `;
     
@@ -5654,9 +5807,9 @@ function handleFile(file) {
       window.lucide.createIcons();
     }
     
-    convertFileToPdf(file)
-      .then(pdfFile => {
-        handleFile(pdfFile);
+    convertFile(file)
+      .then(convertedFile => {
+        handleFile(convertedFile);
       })
       .catch(err => {
         const formatName = file.name.substring(file.name.lastIndexOf('.')).toUpperCase().substring(1);
@@ -5808,6 +5961,7 @@ function backupDataZip() {
       saved_staff_general_documents: state.staffGeneralDocs,
       gemini_api_key: state.apiKey,
       cloudconvert_api_key: state.cloudConvertApiKey,
+      cloudconvert_format: state.cloudConvertFormat,
       theme: state.theme,
       my_company_name: state.myCompany
     };
@@ -5883,6 +6037,10 @@ function handleRestoreFile(file) {
               if (data.cloudconvert_api_key !== undefined) {
                 localStorage.setItem('cloudconvert_api_key', data.cloudconvert_api_key);
               }
+              if (data.cloudconvert_format !== undefined) {
+                localStorage.setItem('cloudconvert_format', data.cloudconvert_format);
+              }
+
               if (data.theme !== undefined) {
                 localStorage.setItem('theme', data.theme);
               }
@@ -5897,6 +6055,7 @@ function handleRestoreFile(file) {
               state.staffGeneralDocs = restoredStaffGeneralDocs;
               state.apiKey = data.gemini_api_key || '';
               state.cloudConvertApiKey = data.cloudconvert_api_key || '';
+              state.cloudConvertFormat = data.cloudconvert_format || 'pdf';
               state.theme = data.theme || 'dark';
               state.myCompany = data.my_company_name || '';
               
@@ -5906,6 +6065,9 @@ function handleRestoreFile(file) {
               updateCloudConvertApiKeyBadge();
               if (elements.cloudConvertApiKeyInput) {
                 elements.cloudConvertApiKeyInput.value = state.cloudConvertApiKey;
+              }
+              if (elements.cloudConvertFormatSelect) {
+                elements.cloudConvertFormatSelect.value = state.cloudConvertFormat;
               }
               elements.headerCompanyInput.value = state.myCompany;
               migrateOldDocuments();

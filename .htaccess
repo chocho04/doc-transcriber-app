@@ -3,11 +3,14 @@ RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule ^api/convert-doc$ convert.php [L,QSA]
 RewriteRule ^api/convert-rtf$ convert.php [L,QSA]
+RewriteRule ^api/convert-xls$ convert.php [L,QSA]
+RewriteRule ^api/convert-to-pdf$ convert.php [L,QSA]
 RewriteRule ^api/load-state$ api.php?action=load [L,QSA]
 RewriteRule ^api/save-state$ api.php?action=save [L,QSA]
+RewriteRule ^api/upload-file$ upload.php [L,QSA]
 
-# Deny direct web access to SQLite and JSON database files
-<FilesMatch "(database\.sqlite|database\.json)$">
+# Deny direct web access to SQLite, JSON database files, and error logs
+<FilesMatch "(database\.sqlite|database\.json|sync_errors\.log)$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>
@@ -16,3 +19,6 @@ RewriteRule ^api/save-state$ api.php?action=save [L,QSA]
         Deny from all
     </IfModule>
 </FilesMatch>
+
+# Prevent Apache from limiting request body size
+LimitRequestBody 0

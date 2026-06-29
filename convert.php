@@ -25,12 +25,16 @@ try {
     // Parse JSON input
     $input = json_decode(file_get_contents('php://input'), true);
     if (!$input || !isset($input['base64Data']) || !isset($input['filename'])) {
-        throw new Exception('Invalid request parameters.');
+        throw new Exception('Invalid request parameters. Missing base64Data or filename.');
     }
 
     $filename = $input['filename'];
     $base64Data = $input['base64Data'];
     $cloudConvertApiKey = $input['cloudConvertApiKey'] ?? '';
+    $targetFormat = strtolower($input['targetFormat'] ?? 'pdf');
+    if (!in_array($targetFormat, ['pdf', 'png'])) {
+        $targetFormat = 'pdf';
+    }
 
     // Extract actual base64 content
     if (strpos($base64Data, ';base64,') !== false) {
@@ -48,23 +52,25 @@ try {
     $extension = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
 
     // Method 1: Local LibreOffice Conversion (highly efficient, works on VPS/Dedicated servers)
-    $pdfBase64 = tryLocalConversion($fileData, $extension);
+    $pdfBase64 = tryLocalConversion($fileData, $extension, $targetFormat);
 
     // Method 2: CloudConvert API Conversion (fallback for standard shared cPanel hosting)
     if (!$pdfBase64) {
         if (empty($cloudConvertApiKey)) {
             throw new Exception('Локалното конвертиране не е налично на този сървър. Моля, конфигурирайте вашия CloudConvert API ключ в Настройките на приложението.');
         }
-        $pdfBase64 = tryCloudConvert($base64Content, $filename, $extension, $cloudConvertApiKey);
+        $pdfBase64 = tryCloudConvert($base64Content, $filename, $extension, $cloudConvertApiKey, $targetFormat);
     }
 
     if (!$pdfBase64) {
         throw new Exception('Конвертирането на документа е неуспешно.');
     }
 
+    $mime = ($targetFormat === 'png') ? 'image/png' : 'application/pdf';
+
     echo json_encode([
         'success' => true,
-        'base64Data' => 'data:application/pdf;base64,' . $pdfBase64
+        'base64Data' => 'data:' . $mime . ';base64,' . $pdfBase64
     ]);
 
 } catch (Exception $e) {
@@ -78,7 +84,7 @@ try {
 /**
  * Converts document using local LibreOffice soffice
  */
-function tryLocalConversion($fileData, $extension) {
+function tryLocalConversion($fileData, $extension, $targetFormat) {
     if (!function_exists('shell_exec') || !function_exists('exec')) {
         return null;
     }
@@ -103,7 +109,7 @@ function tryLocalConversion($fileData, $extension) {
     $tempDir = sys_get_temp_dir();
     $tempId = uniqid('conv_', true);
     $inputFile = $tempDir . DIRECTORY_SEPARATOR . $tempId . '.' . $extension;
-    $outputPdf = $tempDir . DIRECTORY_SEPARATOR . $tempId . '.pdf';
+    $outputFile = $tempDir . DIRECTORY_SEPARATOR . $tempId . '.' . $targetFormat;
 
     if (file_put_contents($inputFile, $fileData) === false) {
         return null;
@@ -111,7 +117,8 @@ function tryLocalConversion($fileData, $extension) {
 
     // Convert using headless soffice
     $cmd = sprintf(
-        'soffice --headless --convert-to pdf --outdir %s %s 2>&1',
+        'soffice --headless --convert-to %s --outdir %s %s 2>&1',
+        escapeshellarg($targetFormat),
         escapeshellarg($tempDir),
         escapeshellarg($inputFile)
     );
@@ -119,15 +126,15 @@ function tryLocalConversion($fileData, $extension) {
     shell_exec($cmd);
 
     $pdfBase64 = null;
-    if (file_exists($outputPdf) && filesize($outputPdf) > 0) {
-        $pdfData = file_get_contents($outputPdf);
+    if (file_exists($outputFile) && filesize($outputFile) > 0) {
+        $pdfData = file_get_contents($outputFile);
         if ($pdfData) {
             $pdfBase64 = base64_encode($pdfData);
         }
     }
 
     @unlink($inputFile);
-    @unlink($outputPdf);
+    @unlink($outputFile);
 
     return $pdfBase64;
 }
@@ -135,7 +142,7 @@ function tryLocalConversion($fileData, $extension) {
 /**
  * Converts document using CloudConvert API
  */
-function tryCloudConvert($base64Content, $filename, $extension, $apiKey) {
+function tryCloudConvert($base64Content, $filename, $extension, $apiKey, $targetFormat) {
     // 1. Create a CloudConvert Job
     $url = "https://api.cloudconvert.com/v2/jobs";
     $jobPayload = [
@@ -146,7 +153,7 @@ function tryCloudConvert($base64Content, $filename, $extension, $apiKey) {
             'convert-1' => [
                 'operation' => 'convert',
                 'input' => 'import-1',
-                'output_format' => 'pdf'
+                'output_format' => $targetFormat
             ],
             'export-1' => [
                 'operation' => 'export/url',

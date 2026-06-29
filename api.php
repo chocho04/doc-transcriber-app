@@ -42,6 +42,29 @@ function reportOfflineFallback() {
     }
 }
 
+/**
+ * Writes diagnostic error details to a secure file sync_errors.log
+ */
+function logSyncError($message, $context = []) {
+    $logFile = __DIR__ . '/sync_errors.log';
+    $timestamp = date('Y-m-d H:i:s');
+    $logData = [
+        'timestamp' => $timestamp,
+        'message' => $message,
+        'context' => $context,
+        'server' => [
+            'request_method' => $_SERVER['REQUEST_METHOD'] ?? '',
+            'content_length' => $_SERVER['CONTENT_LENGTH'] ?? ($_SERVER['HTTP_CONTENT_LENGTH'] ?? '0'),
+            'content_type' => $_SERVER['CONTENT_TYPE'] ?? ($_SERVER['HTTP_CONTENT_TYPE'] ?? ''),
+            'post_max_size' => ini_get('post_max_size'),
+            'upload_max_filesize' => ini_get('upload_max_filesize'),
+            'memory_limit' => ini_get('memory_limit'),
+        ]
+    ];
+    $logLine = json_encode($logData, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+    @file_put_contents($logFile, $logLine, FILE_APPEND);
+}
+
 if (!DB_ENABLED) {
     reportOfflineFallback();
     exit();
@@ -97,6 +120,10 @@ try {
     }
 
 } catch (Exception $e) {
+    logSyncError('Database or API exception: ' . $e->getMessage(), [
+        'trace' => $e->getTraceAsString(),
+        'code' => $e->getCode()
+    ]);
     http_response_code(500);
     echo json_encode([
         'success' => false,
@@ -136,10 +163,37 @@ function loadAppState($db) {
  * Saves or updates a key-value entry in database
  */
 function saveAppState($db) {
-    $input = json_decode(file_get_contents('php://input'), true);
-    if (!$input || !isset($input['key']) || !isset($input['value'])) {
+    $raw_input = file_get_contents('php://input');
+    $input = json_decode($raw_input, true);
+    if (!$input || !is_array($input)) {
+        $input = $_POST;
+    }
+
+    if (!is_array($input) || !array_key_exists('key', $input) || !array_key_exists('value', $input)) {
+        $contentLength = (int)($_SERVER['CONTENT_LENGTH'] ?? ($_SERVER['HTTP_CONTENT_LENGTH'] ?? 0));
+        $postMaxSize = ini_get('post_max_size');
+        
+        $errorMsg = 'Missing key or value in request payload.';
+        $isSizeViolation = false;
+        
+        if ($_SERVER['REQUEST_METHOD'] === 'POST' && $contentLength > 0 && empty($raw_input) && empty($_POST)) {
+            $isSizeViolation = true;
+            $errorMsg = "Request payload discarded. The request size ($contentLength bytes) likely exceeds your server's PHP 'post_max_size' limit ($postMaxSize). Please increase 'post_max_size' and 'upload_max_filesize' in your cPanel PHP selector/MultiPHP settings.";
+        }
+
+        logSyncError($errorMsg, [
+            'action' => 'save',
+            'content_length' => $contentLength,
+            'json_error' => json_last_error_msg(),
+            'is_size_violation' => $isSizeViolation
+        ]);
+
         http_response_code(400);
-        echo json_encode(['success' => false, 'error' => 'Missing key or value in request payload.']);
+        echo json_encode([
+            'success' => false, 
+            'error' => $errorMsg,
+            'is_size_limit_issue' => $isSizeViolation
+        ]);
         return;
     }
 
