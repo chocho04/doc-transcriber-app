@@ -1127,6 +1127,15 @@
     <span id="toast-message">Notification message</span>
   </div>
 
+  <!-- Persistent Database Sync Error Banner -->
+  <div id="sync-banner" class="sync-banner hidden" role="alert">
+    <i data-lucide="cloud-off" class="sync-banner-icon"></i>
+    <span id="sync-banner-message">Грешка при синхронизация с базата данни.</span>
+    <button id="sync-banner-close" class="sync-banner-close" aria-label="Затвори">
+      <i data-lucide="x"></i>
+    </button>
+  </div>
+
   <!-- Hover Image Preview Container -->
   <div id="hover-image-preview" class="hover-image-preview hidden">
     <img id="hover-preview-img" src="" alt="Preview">

@@ -37,6 +37,56 @@ function checkIsText(url) {
   return url.startsWith('data:text/') || url.startsWith('data:application/rtf') || /\.(txt|rtf)$/i.test(url);
 }
 
+// Converts a base64 data URL (e.g. "data:image/jpeg;base64,...") into a Blob.
+// Sending a real binary Blob via multipart/form-data avoids ModSecurity/WAF
+// rules that strip long base64 strings, and is ~25% smaller than base64.
+function dataUrlToBlob(dataUrl) {
+  const commaIdx = dataUrl.indexOf(',');
+  const header = dataUrl.substring(0, commaIdx);
+  const data = dataUrl.substring(commaIdx + 1);
+  const mimeMatch = header.match(/data:([^;]+)/);
+  const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
+  const isBase64 = header.includes(';base64');
+  const binary = isBase64 ? atob(data) : decodeURIComponent(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new Blob([bytes], { type: mime });
+}
+
+// Maps a data URL MIME type to a file extension the server allows.
+const MIME_TO_EXT = {
+  'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/pjpeg': 'jpg',
+  'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
+  'application/pdf': 'pdf', 'text/plain': 'txt', 'text/csv': 'csv',
+  'application/rtf': 'rtf', 'text/rtf': 'rtf',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.ms-powerpoint': 'ppt',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'application/vnd.oasis.opendocument.text': 'odt',
+  'application/vnd.oasis.opendocument.spreadsheet': 'ods',
+  'application/vnd.oasis.opendocument.presentation': 'odp'
+};
+
+// Ensures the upload filename ends with a valid extension. The app stores
+// capturedFileName WITHOUT an extension (and camera captures use names like
+// "Capture 6/29/2026"), which the server's allow-list rejects. We derive the
+// correct extension from the data URL's MIME type.
+function ensureUploadFilename(filename, dataUrl) {
+  const name = (filename || 'file').trim();
+  if (/\.[a-z0-9]{1,5}$/i.test(name)) {
+    return name; // already has an extension
+  }
+  const mimeMatch = dataUrl.match(/^data:([^;,]+)/i);
+  const mime = mimeMatch ? mimeMatch[1].toLowerCase() : '';
+  const ext = MIME_TO_EXT[mime] || 'jpg'; // default to jpg (images are the common case)
+  return `${name}.${ext}`;
+}
+
 async function uploadFileToServer(base64Data, filename) {
   if (!base64Data || !base64Data.startsWith('data:')) {
     return base64Data;
@@ -45,23 +95,37 @@ async function uploadFileToServer(base64Data, filename) {
     ? 'http://127.0.0.1:8080/api/upload-file'
     : 'api/upload-file';
   try {
+    // Send as multipart/form-data with a real binary file part. ModSecurity/WAF
+    // skips inspecting multipart file payloads (it strips raw/base64 bodies), so
+    // this is the transport that reliably passes through this host's firewall.
+    const safeName = ensureUploadFilename(filename, base64Data);
+    const blob = dataUrlToBlob(base64Data);
+    const formData = new FormData();
+    formData.append('file', blob, safeName);
+    formData.append('filename', safeName);
+
+    // Do NOT set Content-Type manually; the browser adds the multipart boundary.
     const response = await fetch(apiEndpoint, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ base64Data, filename })
+      body: formData
     });
     if (!response.ok) {
-      throw new Error(`Upload status ${response.status}`);
+      let errMsg = `Upload status ${response.status}`;
+      try {
+        const errJson = await response.json();
+        if (errJson && errJson.error) errMsg = errJson.error;
+      } catch (e) {}
+      throw new Error(errMsg);
     }
     const result = await response.json();
     if (result && result.success && result.url) {
+      hideSyncError();
       return result.url;
     }
     throw new Error(result.error || 'Unknown upload response');
   } catch (err) {
     console.warn("File upload failed, falling back to local base64:", err);
+    showSyncError(`Файлът не можа да бъде качен на сървъра (${err && err.message ? err.message : 'грешка'}). Запазен е само в браузъра.`);
     return base64Data;
   }
 }
@@ -138,12 +202,17 @@ function syncToDatabase(key, value) {
           errMsg = errJson.error;
         }
       } catch (e) {}
-      
+
       console.warn(`Database sync failed for key ${key}: ${errMsg}`);
+      showSyncError(`Грешка при запис в базата данни: ${errMsg}`);
+    } else {
+      // A successful sync clears any previously shown banner.
+      hideSyncError();
     }
   })
   .catch(err => {
     console.warn(`Database sync network error for key ${key}:`, err);
+    showSyncError(`Няма връзка с базата данни: ${err && err.message ? err.message : 'мрежова грешка'}. Данните са запазени само в браузъра.`);
   });
 }
 
@@ -462,6 +531,13 @@ const elements = {
 function init() {
   initPINAuthentication();
   applyTheme();
+
+  // Allow the user to dismiss the sync-error banner.
+  const syncBannerClose = document.getElementById('sync-banner-close');
+  if (syncBannerClose) {
+    syncBannerClose.addEventListener('click', hideSyncError);
+  }
+
   updateApiKeyBadge();
   updateCloudConvertApiKeyBadge();
   migrateOldDocuments();
@@ -5909,6 +5985,23 @@ function getIconForMime(base64Str) {
 // ==========================================
 
 let toastTimeout;
+// Persistent database-sync error banner.
+// Unlike showToast (auto-hides in 4s), this stays until a sync succeeds
+// or the user dismisses it, so background sync failures aren't missed.
+function showSyncError(message) {
+  const banner = document.getElementById('sync-banner');
+  const msgEl = document.getElementById('sync-banner-message');
+  if (!banner || !msgEl) return;
+  msgEl.textContent = message;
+  banner.classList.remove('hidden');
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function hideSyncError() {
+  const banner = document.getElementById('sync-banner');
+  if (banner) banner.classList.add('hidden');
+}
+
 function showToast(message, iconName = 'info') {
   clearTimeout(toastTimeout);
   

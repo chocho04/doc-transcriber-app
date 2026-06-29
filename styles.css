@@ -1800,6 +1800,68 @@ body.light-theme .invoice-item-input:focus {
   }
 }
 
+/* Persistent Database Sync Error Banner */
+.sync-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: var(--danger);
+  color: #fff;
+  padding: 0.75rem 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  z-index: 300;
+  box-shadow: var(--shadow-lg);
+  font-size: 0.9rem;
+  animation: sync-banner-enter 0.3s ease-out;
+}
+
+.sync-banner-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+#sync-banner-message {
+  flex: 1;
+  line-height: 1.35;
+}
+
+.sync-banner-close {
+  background: transparent;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  padding: 0.25rem;
+  display: flex;
+  align-items: center;
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+
+.sync-banner-close:hover {
+  opacity: 1;
+}
+
+.sync-banner-close i {
+  width: 18px;
+  height: 18px;
+}
+
+@keyframes sync-banner-enter {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
 /* Utility Helpers */
 .hidden {
   display: none !important;
