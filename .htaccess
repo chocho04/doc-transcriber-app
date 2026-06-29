@@ -4,6 +4,7 @@ RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule ^api/convert-to-pdf$ convert.php [L,QSA]
 RewriteRule ^api/upload-file$ upload.php [L,QSA]
 RewriteRule ^api/delete-file$ delete.php [L,QSA]
+RewriteRule ^api/restore-file$ restore.php [L,QSA]
 
 # Deny direct web access to error logs
 <FilesMatch "(sync_errors\.log)$">

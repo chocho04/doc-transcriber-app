@@ -61,6 +61,68 @@ function deleteFileFromServer(imageUrl) {
   }).catch(err => console.warn('Failed to delete server file:', imageUrl, err));
 }
 
+// Resolves an "uploads/..." reference to a fetchable URL (absolute to the dev
+// server when the page is opened via file://).
+function resolveUploadUrl(url) {
+  if (window.location.protocol === 'file:' && url.startsWith('uploads/')) {
+    return 'http://127.0.0.1:8080/' + url;
+  }
+  return url;
+}
+
+// Gathers the unique "uploads/..." file references across all backed-up data,
+// so a backup can bundle the actual files (the data only stores URL references).
+function collectUploadUrls() {
+  const urls = new Set();
+  const add = (u) => { if (typeof u === 'string' && u.startsWith('uploads/')) urls.add(u); };
+  (state.documents || []).forEach(d => add(d.image));
+  (state.generalDocs || []).forEach(d => add(d.image));
+  (state.staffGeneralDocs || []).forEach(d => add(d.image));
+  (state.staff || []).forEach(p => (p.documents || []).forEach(sd => add(sd.image)));
+  return Array.from(urls);
+}
+
+// Restores a single bundled file back into the server's uploads/ folder under
+// its ORIGINAL name, so the URL references in the restored data stay valid.
+async function restoreFileToServer(filename, base64Data) {
+  const apiEndpoint = window.location.protocol === 'file:'
+    ? 'http://127.0.0.1:8080/api/restore-file'
+    : '/api/restore-file';
+  try {
+    const r = await fetch(apiEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename, base64Data })
+    });
+    return r.ok;
+  } catch (err) {
+    console.warn('Failed to restore server file:', filename, err);
+    return false;
+  }
+}
+
+// Writes every "uploads/<name>" entry bundled in a restore ZIP back to the
+// server, preserving names. Returns counts so the UI can report results.
+async function restoreUploadsFromZip(zip) {
+  const entries = [];
+  zip.forEach((relPath, entry) => {
+    if (!entry.dir && relPath.indexOf('uploads/') === 0) entries.push(entry);
+  });
+  let restored = 0;
+  for (const entry of entries) {
+    try {
+      const base64 = await entry.async('base64');
+      const name = entry.name.substring('uploads/'.length);
+      if (!name) continue;
+      const ok = await restoreFileToServer(name, 'data:application/octet-stream;base64,' + base64);
+      if (ok) restored++;
+    } catch (err) {
+      console.warn('Restore: could not write', entry.name, err);
+    }
+  }
+  return { total: entries.length, restored };
+}
+
 // The admin password gates deletions AND access to the Settings panel.
 // Defaults to "1234" until the user changes it in Settings (an empty value
 // also falls back to the default, so the gate can never be removed entirely).
@@ -5841,12 +5903,12 @@ function escapeHTML(str) {
 // Backup & Restore Functions
 // ==========================================
 
-function backupDataZip() {
+async function backupDataZip() {
   if (typeof JSZip === 'undefined') {
     showToast('Архивиращата библиотека (JSZip) все още се зарежда...', 'alert-triangle');
     return;
   }
-  
+
   const originalHtml = elements.btnBackup.innerHTML;
   elements.btnBackup.disabled = true;
   elements.btnBackup.innerHTML = `<i data-lucide="loader-2" class="animate-spin"></i> <span>Архивиране...</span>`;
@@ -5865,30 +5927,46 @@ function backupDataZip() {
       theme: state.theme,
       my_company_name: state.myCompany
     };
-    
+
     zip.file("backup_data.json", JSON.stringify(backupObj, null, 2));
-    
-    zip.generateAsync({ type: "blob" }).then((content) => {
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(content);
-      const dateStr = new Date().toISOString().slice(0, 10);
-      link.download = `docuscribe_backup_${dateStr}.zip`;
-      link.click();
-      
-      showToast('Архивът е създаден успешно!', 'check-circle');
-      elements.btnBackup.disabled = false;
-      elements.btnBackup.innerHTML = originalHtml;
-      if (window.lucide) window.lucide.createIcons();
-    }).catch(err => {
-      console.error(err);
-      showToast('Грешка при генериране на архив.', 'alert-circle');
-      elements.btnBackup.disabled = false;
-      elements.btnBackup.innerHTML = originalHtml;
-      if (window.lucide) window.lucide.createIcons();
-    });
+
+    // Bundle the actual uploaded files referenced by the data. The data only
+    // stores "uploads/<name>" URL references now, so without this the backup
+    // would not contain the images/PDFs at all.
+    const urls = collectUploadUrls();
+    let bundled = 0;
+    let missing = 0;
+    for (const url of urls) {
+      try {
+        const resp = await fetch(resolveUploadUrl(url));
+        if (resp.ok) {
+          zip.file(url, await resp.blob()); // stored at "uploads/<name>"
+          bundled++;
+        } else {
+          missing++;
+        }
+      } catch (err) {
+        missing++;
+        console.warn('Backup: could not fetch', url, err);
+      }
+    }
+
+    const content = await zip.generateAsync({ type: "blob" });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(content);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    link.download = `docuscribe_backup_${dateStr}.zip`;
+    link.click();
+
+    if (missing > 0) {
+      showToast(`Архивът е създаден (${bundled} файла; ${missing} липсват).`, 'alert-triangle');
+    } else {
+      showToast(`Архивът е създаден успешно (${bundled} файла).`, 'check-circle');
+    }
   } catch (err) {
     console.error(err);
     showToast('Грешка при архивиране.', 'alert-circle');
+  } finally {
     elements.btnBackup.disabled = false;
     elements.btnBackup.innerHTML = originalHtml;
     if (window.lucide) window.lucide.createIcons();
@@ -5974,8 +6052,26 @@ function handleRestoreFile(file) {
               renderGeneralDocumentList();
               renderStaffList();
               renderStaffGeneralDocsList();
-              
-              showToast('Данните са възстановени успешно!', 'check-circle');
+
+              // Write the bundled upload files back into the server's uploads/
+              // folder (preserving names) so the "uploads/<name>" references in
+              // the restored data resolve again. Older JSON-only backups have no
+              // such entries, so this is a no-op for them.
+              restoreUploadsFromZip(zip).then((res) => {
+                if (res.total > 0) {
+                  // Re-render so the just-written files load fresh (their <img>
+                  // may have 404'd before the files were written).
+                  renderDocumentList();
+                  renderGeneralDocumentList();
+                  renderStaffList();
+                  renderStaffGeneralDocsList();
+                }
+                if (res.total > 0 && res.restored < res.total) {
+                  showToast(`Данните са възстановени; записани са ${res.restored}/${res.total} файла на сървъра.`, 'alert-triangle');
+                } else {
+                  showToast('Данните са възстановени успешно!', 'check-circle');
+                }
+              });
             }
           } else {
             showToast('Невалидна структура на архивните данни.', 'alert-triangle');

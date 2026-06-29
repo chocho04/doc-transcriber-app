@@ -79,6 +79,33 @@ def delete_uploaded_file(url):
     return False
 
 
+def restore_uploaded_file(filename, base64_data):
+    """Writes a bundled backup file back into uploads/ under its ORIGINAL name,
+    so the "uploads/<name>" references in restored data stay valid. Path-traversal
+    safe: only the sanitized basename inside uploads/ is ever written."""
+    b64 = base64_data or ''
+    if b64.startswith('data:'):
+        b64 = b64.split(',', 1)[1] if ',' in b64 else ''
+    file_bytes = base64.b64decode(b64)
+    if not file_bytes:
+        raise Exception("Decoded file is empty.")
+
+    name = os.path.basename((filename or '').replace('\\', '/'))
+    if not name or name in ('.', '..') or not re.match(r'^[A-Za-z0-9._-]+$', name):
+        raise Exception("Invalid filename.")
+
+    uploads_dir = os.path.realpath(os.path.join(os.getcwd(), 'uploads'))
+    os.makedirs(uploads_dir, exist_ok=True)
+    target = os.path.join(uploads_dir, name)
+    if os.path.dirname(os.path.realpath(target)) != uploads_dir:
+        raise Exception("Path escapes the uploads folder.")
+
+    with open(target, 'wb') as f:
+        f.write(file_bytes)
+    print(f"[Restore] Wrote {len(file_bytes)} bytes -> uploads/{name}")
+    return f"uploads/{name}"
+
+
 def convert_file(filename, base64_data, api_key, output_format='pdf'):
     print(f"[CloudConvert] Starting conversion job for: {filename} -> {output_format}")
 
@@ -317,6 +344,29 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(response_bytes)
             except Exception as e:
                 print(f"[Delete Error] {str(e)}")
+                response_bytes = json.dumps({'success': False, 'error': str(e)}).encode('utf-8')
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(response_bytes)))
+                self.end_headers()
+                self.wfile.write(response_bytes)
+            return
+
+        # ----- File restore: write a bundled backup file back into uploads/ -----
+        if path == '/api/restore-file':
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+                url = restore_uploaded_file(data.get('filename'), data.get('base64Data'))
+                response_bytes = json.dumps({'success': True, 'url': url}).encode('utf-8')
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(response_bytes)))
+                self.end_headers()
+                self.wfile.write(response_bytes)
+            except Exception as e:
+                print(f"[Restore Error] {str(e)}")
                 response_bytes = json.dumps({'success': False, 'error': str(e)}).encode('utf-8')
                 self.send_response(500)
                 self.send_header('Content-Type', 'application/json; charset=utf-8')
