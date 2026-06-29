@@ -1,4 +1,9 @@
 RewriteEngine On
+
+# Block direct web access to the Git metadata folder (when the repo is cloned
+# into the web root via cPanel Git Version Control).
+RewriteRule (^|/)\.git(/|$) - [F,L]
+
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
 RewriteRule ^api/convert-to-pdf$ convert.php [L,QSA]
@@ -6,8 +11,8 @@ RewriteRule ^api/upload-file$ upload.php [L,QSA]
 RewriteRule ^api/delete-file$ delete.php [L,QSA]
 RewriteRule ^api/restore-file$ restore.php [L,QSA]
 
-# Deny direct web access to error logs
-<FilesMatch "(sync_errors\.log)$">
+# Deny direct web access to error logs, PHP config, and local-dev-only files
+<FilesMatch "(sync_errors\.log|\.user\.ini|\.gitignore|server\.py|server\.ps1|DEPLOY\.md)$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>
