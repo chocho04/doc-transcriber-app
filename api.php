@@ -76,9 +76,8 @@ try {
     if ($USE_JSON) {
         if (!file_exists(JSON_FILE)) { file_put_contents(JSON_FILE, json_encode([])); @chmod(JSON_FILE, 0644); }
     } else {
-        if (!is_writable(__DIR__)) {
-            throw new Exception("Directory not writable by PHP (set 755/775 in cPanel).");
-        }
+        // SQLite will raise a clear error itself if the directory isn't writable;
+        // an explicit is_writable() precheck false-negatives on some platforms.
         $db = new SQLite3(SQLITE_FILE);
         $db->enableExceptions(true);
         $db->busyTimeout(5000);
