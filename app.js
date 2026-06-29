@@ -4078,12 +4078,7 @@ function setupEventListeners() {
       }
       localStorage.setItem('app_access_pin', pin);
       showToast('PIN кодът е променен.', 'check-circle');
-      
-      const authHint = document.querySelector('.auth-hint');
-      if (authHint) {
-        authHint.textContent = `За развойна среда: PIN е ${pin}`;
-      }
-      
+
       const dotsContainer = document.querySelector('.pin-dots');
       if (dotsContainer) {
         dotsContainer.innerHTML = '';
@@ -6146,11 +6141,6 @@ function initPINAuthentication() {
   const correctPIN = localStorage.getItem('app_access_pin') || '1234';
   const targetLength = correctPIN.length;
 
-  const authHint = overlay.querySelector('.auth-hint');
-  if (authHint) {
-    authHint.textContent = `За развойна среда: PIN е ${correctPIN}`;
-  }
-  
   // Dynamically generate the dot spans based on the PIN length
   const dotsContainer = overlay.querySelector('.pin-dots');
   if (dotsContainer) {
