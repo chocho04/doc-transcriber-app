@@ -3,3 +3,14 @@
 
 # Python bytecode cache
 __pycache__/
+
+# Server-side state store (synced data) — never commit
+database.sqlite
+database.json
+
+# Sync secret (you create this per-server; never commit)
+sync_secret.php
+sync_secret.txt
+
+# Sync error log
+sync_errors.log

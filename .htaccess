@@ -10,9 +10,12 @@ RewriteRule ^api/convert-to-pdf$ convert.php [L,QSA]
 RewriteRule ^api/upload-file$ upload.php [L,QSA]
 RewriteRule ^api/delete-file$ delete.php [L,QSA]
 RewriteRule ^api/restore-file$ restore.php [L,QSA]
+RewriteRule ^api/load-state$ api.php?action=load [L,QSA]
+RewriteRule ^api/save-state$ api.php?action=save [L,QSA]
 
-# Deny direct web access to error logs, PHP config, and local-dev-only files
-<FilesMatch "(sync_errors\.log|\.user\.ini|\.gitignore|server\.py|server\.ps1|DEPLOY\.md)$">
+# Deny direct web access to the data store, the sync secret, error logs,
+# PHP config, and local-dev-only files
+<FilesMatch "(database\.sqlite|database\.json|sync_secret\.php|sync_errors\.log|\.user\.ini|\.gitignore|server\.py|server\.ps1|DEPLOY\.md)$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>

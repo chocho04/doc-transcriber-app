@@ -20,6 +20,13 @@
 </head>
 
 <body>
+  <!-- Sync status banner -->
+  <div id="sync-banner" class="sync-banner hidden" role="alert">
+    <i data-lucide="cloud-off" class="sync-banner-icon"></i>
+    <span id="sync-banner-message">Грешка при синхронизация със сървъра.</span>
+    <button id="sync-banner-close" class="sync-banner-close" aria-label="Затвори">&times;</button>
+  </div>
+
   <!-- Authentication PIN Screen Overlay -->
   <div id="auth-overlay" class="auth-overlay">
     <div class="auth-card">
@@ -731,6 +738,10 @@
                 <label for="admin-password-input">Администраторска парола за изтриване</label>
                 <input type="password" maxlength="32" id="admin-password-input" class="header-company-input" placeholder="1234" autocomplete="new-password">
               </div>
+              <div class="footer-company-group">
+                <label for="sync-key-input">Ключ за синхронизация (един и същ на всички устройства)</label>
+                <input type="password" maxlength="128" id="sync-key-input" class="header-company-input" placeholder="Празно = само локално" autocomplete="new-password">
+              </div>
             </div>
           </div>
 
@@ -756,6 +767,10 @@
                 <button id="btn-restore" class="btn btn-secondary">
                   <i data-lucide="upload"></i>
                   <span>Възстанови от архив (ZIP)</span>
+                </button>
+                <button id="btn-sync-refresh" class="btn btn-secondary">
+                  <i data-lucide="refresh-cw"></i>
+                  <span>Опресни от сървъра</span>
                 </button>
                 <input type="file" id="backup-file-input" accept=".zip" style="display: none;">
               </div>

@@ -156,6 +156,141 @@ function confirmDelete(message) {
   return false;
 }
 
+// ==========================================
+// Server-side state sync (single shared dataset, token-gated)
+// ==========================================
+// Keys mirrored to the server so every device shares them. Per-device only
+// (never synced): app_access_pin, admin_delete_password, sync_key, theme.
+const SYNC_KEYS = [
+  'saved_documents', 'saved_general_documents', 'saved_staff',
+  'saved_staff_general_documents', 'saved_unattached_staff_docs',
+  'my_company_name', 'cloudconvert_format',
+  'gemini_api_key', 'cloudconvert_api_key'
+];
+let syncSuspended = false; // true while applying server data, to avoid echoing it back
+
+function getSyncKey() { return (localStorage.getItem('sync_key') || '').trim(); }
+function syncEndpoint(path) {
+  return window.location.protocol === 'file:' ? 'http://127.0.0.1:8080' + path : path;
+}
+
+// Mirror writes to synced keys up to the server (debounced per key).
+(function () {
+  const original = localStorage.setItem.bind(localStorage);
+  const timers = {};
+  localStorage.setItem = function (key, value) {
+    original(key, value);
+    if (syncSuspended || SYNC_KEYS.indexOf(key) === -1) return;
+    const token = getSyncKey();
+    if (!token) return; // sync not enabled on this device
+    clearTimeout(timers[key]);
+    timers[key] = setTimeout(() => {
+      fetch(syncEndpoint('/api/save-state'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Sync-Token': token },
+        body: JSON.stringify({ key, value })
+      }).then(async (r) => {
+        if (!r.ok) {
+          let msg = 'HTTP ' + r.status;
+          try { const j = await r.json(); if (j && j.error) msg = j.error; } catch (e) {}
+          throw new Error(msg);
+        }
+        hideSyncError();
+      }).catch((err) => {
+        console.warn('Sync save failed for', key, err);
+        showSyncError('Грешка при синхронизация със сървъра: ' + (err && err.message ? err.message : 'мрежова грешка'));
+      });
+    }, 600);
+  };
+})();
+
+// Pulls the shared dataset from the server into localStorage + state. On the very
+// first run (empty server) it seeds the server from this device instead.
+async function loadStateFromServer() {
+  const token = getSyncKey();
+  if (!token) return; // sync disabled on this device
+  let r, result;
+  try {
+    r = await fetch(syncEndpoint('/api/load-state'), { headers: { 'X-Sync-Token': token } });
+    result = await r.json();
+  } catch (err) {
+    console.warn('Sync load failed:', err);
+    showSyncError('Няма връзка със сървъра за синхронизация. Работите локално.');
+    return;
+  }
+  if (!r.ok || !result || !result.success) {
+    if (r.status === 401 || (result && result.error === 'unauthorized')) {
+      showSyncError('Невалиден ключ за синхронизация.');
+    } else if (result && result.error === 'sync_not_configured') {
+      showSyncError('Синхронизацията не е настроена на сървъра.');
+    }
+    return;
+  }
+
+  const data = result.data || {};
+  if (Object.keys(data).length === 0) {
+    // First run: seed the server from whatever this device already has.
+    SYNC_KEYS.forEach((k) => {
+      const v = localStorage.getItem(k);
+      if (v != null) localStorage.setItem(k, v); // triggers the sync interceptor
+    });
+    hideSyncError();
+    return;
+  }
+
+  // Apply the server's shared data (server is the source of truth).
+  syncSuspended = true;
+  SYNC_KEYS.forEach((k) => {
+    if (data[k] !== undefined && data[k] !== null) {
+      localStorage.setItem(k, data[k]);
+    }
+  });
+  syncSuspended = false;
+  reloadStateFromLocalStorage();
+  hideSyncError();
+}
+
+// Re-reads synced values from localStorage into in-memory state + the UI.
+function reloadStateFromLocalStorage() {
+  try {
+    state.documents = JSON.parse(localStorage.getItem('saved_documents')) || [];
+    state.generalDocs = JSON.parse(localStorage.getItem('saved_general_documents')) || [];
+    state.staff = JSON.parse(localStorage.getItem('saved_staff')) || [];
+    state.staffGeneralDocs = JSON.parse(localStorage.getItem('saved_staff_general_documents')) || [];
+    state.unattachedStaffDocs = JSON.parse(localStorage.getItem('saved_unattached_staff_docs')) || [];
+  } catch (e) {
+    console.warn('Failed to parse restored state arrays', e);
+  }
+  state.apiKey = localStorage.getItem('gemini_api_key') || '';
+  state.cloudConvertApiKey = localStorage.getItem('cloudconvert_api_key') || '';
+  state.cloudConvertFormat = localStorage.getItem('cloudconvert_format') || 'pdf';
+  state.myCompany = localStorage.getItem('my_company_name') || '';
+
+  if (elements.apiKeyInput) elements.apiKeyInput.value = state.apiKey;
+  if (elements.cloudConvertApiKeyInput) elements.cloudConvertApiKeyInput.value = state.cloudConvertApiKey;
+  if (elements.cloudConvertFormatSelect) elements.cloudConvertFormatSelect.value = state.cloudConvertFormat;
+  if (elements.headerCompanyInput) elements.headerCompanyInput.value = state.myCompany;
+  updateApiKeyBadge();
+  updateCloudConvertApiKeyBadge();
+
+  migrateOldDocuments();
+  renderDocumentList();
+  renderGeneralDocumentList();
+  renderStaffList();
+  renderStaffGeneralDocsList();
+}
+
+function showSyncError(message) {
+  const banner = document.getElementById('sync-banner');
+  const msgEl = document.getElementById('sync-banner-message');
+  if (msgEl && message) msgEl.textContent = message;
+  if (banner) banner.classList.remove('hidden');
+}
+function hideSyncError() {
+  const banner = document.getElementById('sync-banner');
+  if (banner) banner.classList.add('hidden');
+}
+
 // State Management
 let state = {
   apiKey: localStorage.getItem('gemini_api_key') || '',
@@ -371,6 +506,8 @@ const elements = {
   cloudConvertFormatSelect: document.getElementById('cloudconvert-format-select'),
   appPinInput: document.getElementById('app-pin-input'),
   adminPasswordInput: document.getElementById('admin-password-input'),
+  syncKeyInput: document.getElementById('sync-key-input'),
+  btnSyncRefresh: document.getElementById('btn-sync-refresh'),
   
   // Lightbox Modal
   modalImage: document.getElementById('modal-image'),
@@ -457,6 +594,9 @@ function init() {
   if (elements.adminPasswordInput) {
     elements.adminPasswordInput.value = getAdminPassword();
   }
+  if (elements.syncKeyInput) {
+    elements.syncKeyInput.value = localStorage.getItem('sync_key') || '';
+  }
   
   renderDocumentList();
   renderGeneralDocumentList();
@@ -484,7 +624,13 @@ function init() {
   }
   
   window.addEventListener('resize', handleScreenResize);
-  
+
+  // Sync-error banner dismiss + initial pull of the shared dataset (no-op if no
+  // sync key set on this device).
+  const syncBannerClose = document.getElementById('sync-banner-close');
+  if (syncBannerClose) syncBannerClose.addEventListener('click', hideSyncError);
+  loadStateFromServer();
+
   // Initialize Lucide icons
   if (window.lucide) {
     window.lucide.createIcons();
@@ -4105,6 +4251,32 @@ function setupEventListeners() {
       } else {
         showToast('Администраторската парола е променена.', 'check-circle');
       }
+    });
+  }
+
+  // Sync key (per-device). Setting it enables server sync and re-pulls the data.
+  if (elements.syncKeyInput) {
+    elements.syncKeyInput.addEventListener('change', (e) => {
+      localStorage.setItem('sync_key', e.target.value.trim());
+      if (getSyncKey()) {
+        showToast('Ключът за синхронизация е запазен. Зареждане от сървъра...', 'refresh-cw');
+        loadStateFromServer();
+      } else {
+        hideSyncError();
+        showToast('Синхронизацията е изключена на това устройство.', 'info');
+      }
+    });
+  }
+
+  // Manual "refresh from server" button (pull another device's changes).
+  if (elements.btnSyncRefresh) {
+    elements.btnSyncRefresh.addEventListener('click', () => {
+      if (!getSyncKey()) {
+        showToast('Първо въведете ключ за синхронизация в настройките.', 'alert-triangle');
+        return;
+      }
+      showToast('Зареждане от сървъра...', 'refresh-cw');
+      loadStateFromServer().then(() => showToast('Готово.', 'check-circle'));
     });
   }
 

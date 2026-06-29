@@ -106,6 +106,41 @@ def restore_uploaded_file(filename, base64_data):
     return f"uploads/{name}"
 
 
+STATE_FILE = 'database.json'
+
+
+def sync_secret():
+    """Expected sync token, read from sync_secret.txt (not in the repo).
+    Returns '' if the file is absent -> sync is treated as not configured."""
+    path = os.path.join(os.getcwd(), 'sync_secret.txt')
+    if not os.path.isfile(path):
+        return ''
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read().strip()
+    except OSError:
+        return ''
+
+
+def load_state():
+    path = os.path.join(os.getcwd(), STATE_FILE)
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f) or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(key, value):
+    path = os.path.join(os.getcwd(), STATE_FILE)
+    data = load_state()
+    data[str(key)] = value
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False)
+
+
 def convert_file(filename, base64_data, api_key, output_format='pdf'):
     print(f"[CloudConvert] Starting conversion job for: {filename} -> {output_format}")
 
@@ -245,23 +280,60 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
         # CORS Headers to support file:// origins and other ports
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Sync-Token')
         super().end_headers()
 
     def do_OPTIONS(self):
         self.send_response(200)
         self.end_headers()
 
+    def _send_json(self, obj, code=200):
+        body = json.dumps(obj, ensure_ascii=False).encode('utf-8')
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _sync_auth(self):
+        """True if the request carries the correct sync token. Otherwise sends an
+        error response and returns False."""
+        expected = sync_secret()
+        if not expected:
+            self._send_json({'success': False, 'error': 'sync_not_configured'})
+            return False
+        if self.headers.get('X-Sync-Token', '') != expected:
+            self._send_json({'success': False, 'error': 'unauthorized'}, 401)
+            return False
+        return True
+
     def do_GET(self):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
+
+        # ----- State sync: load the shared dataset -----
+        if path == '/api/load-state':
+            if not self._sync_auth():
+                return
+            self._send_json({'success': True, 'data': load_state()})
+            return
+
         if path == '/':
             path = '/index.html'
-        
+
         # Prevent directory traversal
         path = path.replace('..', '')
         local_path = os.path.join(os.getcwd(), path.lstrip('/'))
-        
+
+        # Never serve the data store, secrets, or logs as static files.
+        if os.path.basename(local_path).lower() in (
+            'database.json', 'database.sqlite', 'sync_secret.txt', 'sync_secret.php', 'sync_errors.log'):
+            self.send_response(403)
+            self.send_header('Content-Type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b"403 - Forbidden")
+            return
+
         if os.path.exists(local_path) and os.path.isfile(local_path):
             self.send_response(200)
             
@@ -300,6 +372,23 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
+
+        # ----- State sync: save one key of the shared dataset -----
+        if path == '/api/save-state':
+            if not self._sync_auth():
+                return
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+                if 'key' not in data or 'value' not in data:
+                    raise Exception('Missing key or value.')
+                save_state(data['key'], data['value'])
+                self._send_json({'success': True})
+            except Exception as e:
+                print(f"[Sync Error] {str(e)}")
+                self._send_json({'success': False, 'error': str(e)}, 500)
+            return
 
         # ----- File upload: save the posted file into the uploads/ folder -----
         if path == '/api/upload-file':

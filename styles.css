@@ -7,6 +7,37 @@
   padding: 0;
 }
 
+/* Sync status banner */
+.sync-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 1rem;
+  background: #f59e0b;
+  color: #1a1205;
+  font-size: 0.9rem;
+  font-weight: 600;
+  box-shadow: 0 2px 10px rgb(0 0 0 / 25%);
+}
+.sync-banner.hidden { display: none; }
+.sync-banner-icon { width: 18px; height: 18px; flex-shrink: 0; }
+.sync-banner-message,
+.sync-banner #sync-banner-message { flex: 1; }
+.sync-banner-close {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+
 :root {
   /* Colors */
   --bg-primary: #0b0f19;
