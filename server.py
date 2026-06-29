@@ -9,6 +9,7 @@ import base64
 import time
 import re
 import secrets
+import sqlite3
 
 PORT = 8080
 
@@ -106,39 +107,63 @@ def restore_uploaded_file(filename, base64_data):
     return f"uploads/{name}"
 
 
-STATE_FILE = 'database.json'
+STATE_DB = 'database.sqlite'
 
 
-def sync_secret():
-    """Expected sync token, read from sync_secret.txt (not in the repo).
-    Returns '' if the file is absent -> sync is treated as not configured."""
-    path = os.path.join(os.getcwd(), 'sync_secret.txt')
-    if not os.path.isfile(path):
-        return ''
+def _state_conn():
+    """Opens the SQLite state DB (same schema as api.php), creating it if needed."""
+    conn = sqlite3.connect(os.path.join(os.getcwd(), STATE_DB))
+    conn.execute("""CREATE TABLE IF NOT EXISTS app_state (
+        state_key TEXT PRIMARY KEY,
+        state_value TEXT,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )""")
+    return conn
+
+
+DEFAULT_PIN = '1234'
+PIN_KEY = '_access_pin'  # internal row: never exposed via load, never client-writable
+
+
+def get_access_pin():
+    """The shared Access PIN (also the sync credential). Defaults to 1234."""
+    conn = _state_conn()
     try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return f.read().strip()
-    except OSError:
-        return ''
+        row = conn.execute("SELECT state_value FROM app_state WHERE state_key = ?", (PIN_KEY,)).fetchone()
+        return row[0] if row and row[0] else DEFAULT_PIN
+    finally:
+        conn.close()
+
+
+def set_access_pin(new_pin):
+    conn = _state_conn()
+    try:
+        conn.execute("REPLACE INTO app_state (state_key, state_value) VALUES (?, ?)", (PIN_KEY, str(new_pin)))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def load_state():
-    path = os.path.join(os.getcwd(), STATE_FILE)
-    if not os.path.isfile(path):
-        return {}
+    conn = _state_conn()
     try:
-        with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f) or {}
-    except (OSError, ValueError):
-        return {}
+        rows = conn.execute("SELECT state_key, state_value FROM app_state WHERE state_key != ?", (PIN_KEY,)).fetchall()
+        return {k: v for (k, v) in rows}
+    finally:
+        conn.close()
 
 
 def save_state(key, value):
-    path = os.path.join(os.getcwd(), STATE_FILE)
-    data = load_state()
-    data[str(key)] = value
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False)
+    if str(key) == PIN_KEY:
+        return  # protected: change the PIN via /api/set-pin only
+    conn = _state_conn()
+    try:
+        conn.execute(
+            "REPLACE INTO app_state (state_key, state_value) VALUES (?, ?)",
+            (str(key), value))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def convert_file(filename, base64_data, api_key, output_format='pdf'):
@@ -296,13 +321,9 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _sync_auth(self):
-        """True if the request carries the correct sync token. Otherwise sends an
-        error response and returns False."""
-        expected = sync_secret()
-        if not expected:
-            self._send_json({'success': False, 'error': 'sync_not_configured'})
-            return False
-        if self.headers.get('X-Sync-Token', '') != expected:
+        """True if the request carries the correct Access PIN in X-Sync-Token.
+        Otherwise sends a 401 and returns False."""
+        if self.headers.get('X-Sync-Token', '') != get_access_pin():
             self._send_json({'success': False, 'error': 'unauthorized'}, 401)
             return False
         return True
@@ -310,6 +331,11 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
+
+        # ----- Auth info (no auth): PIN length so the pad knows how many digits -----
+        if path == '/api/auth-info':
+            self._send_json({'success': True, 'pinLength': len(get_access_pin())})
+            return
 
         # ----- State sync: load the shared dataset -----
         if path == '/api/load-state':
@@ -372,6 +398,23 @@ class MyHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
+
+        # ----- Change the Access PIN (authenticated with the current PIN) -----
+        if path == '/api/set-pin':
+            if not self._sync_auth():
+                return
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length)
+            try:
+                data = json.loads(post_data.decode('utf-8'))
+                new_pin = str(data.get('value', '')).strip()
+                if not re.match(r'^\d{4,10}$', new_pin):
+                    raise Exception('PIN must be 4-10 digits.')
+                set_access_pin(new_pin)
+                self._send_json({'success': True})
+            except Exception as e:
+                self._send_json({'success': False, 'error': str(e)}, 400)
+            return
 
         # ----- State sync: save one key of the shared dataset -----
         if path == '/api/save-state':

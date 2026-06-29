@@ -41,7 +41,21 @@ Open the site → **Settings** (gear icon; admin password default **1234**) and 
 - **CloudConvert API key** — required to convert non-image files (doc/docx/xls/rtf/
   ppt/odt…). Images and PDFs don't need it.
 
-## 7. Updating later
+## 7. Cross-device sync (automatic, PIN-gated) — IMPORTANT
+Document records + settings sync automatically across devices via SQLite
+(`database.sqlite`, created on first use; JSON fallback `database.json`). The
+**Access PIN is the credential**: log in with the PIN on any device and that
+device's data appears. No extra setup, no secret file.
+
+- The PIN defaults to **`1234`** — **change it immediately** in Settings to a
+  6–10 digit PIN, since the subdomain is public and a 4-digit PIN is easy to
+  guess/brute-force. Changing it updates the server for all devices.
+- `database.sqlite` / `database.json` are **never web-accessible** (denied in
+  `.htaccess`) and are git-ignored (never leave the server).
+- Needs PHP **SQLite3** (standard on cPanel); without it, it auto-falls back to
+  `database.json`.
+
+## 8. Updating later
 Push to GitHub, then cPanel → **Git Version Control** → **Manage** → **Pull**
 (Update from Remote). No build step.
 
@@ -53,6 +67,9 @@ Push to GitHub, then cPanel → **Git Version Control** → **Manage** → **Pul
 | `POST /api/upload-file` | `upload.php` | save a file into `uploads/`, return its URL |
 | `POST /api/delete-file` | `delete.php` | remove a file from `uploads/` |
 | `POST /api/restore-file` | `restore.php` | write a backup file back into `uploads/` (name preserved) |
+| `GET /api/auth-info` | `api.php` | PIN length (public, for the login pad) |
+| `GET /api/load-state` · `POST /api/save-state` | `api.php` | shared SQLite data store (PIN-gated) |
+| `POST /api/set-pin` | `api.php` | change the shared Access PIN |
 | `POST /api/convert-to-pdf` | `convert.php` | convert a doc to PDF/PNG (LibreOffice, else CloudConvert) |
 
 ## PHP requirements

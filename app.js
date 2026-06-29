@@ -160,7 +160,7 @@ function confirmDelete(message) {
 // Server-side state sync (single shared dataset, token-gated)
 // ==========================================
 // Keys mirrored to the server so every device shares them. Per-device only
-// (never synced): app_access_pin, admin_delete_password, sync_key, theme.
+// (never synced): app_access_pin, admin_delete_password, theme.
 const SYNC_KEYS = [
   'saved_documents', 'saved_general_documents', 'saved_staff',
   'saved_staff_general_documents', 'saved_unattached_staff_docs',
@@ -169,7 +169,9 @@ const SYNC_KEYS = [
 ];
 let syncSuspended = false; // true while applying server data, to avoid echoing it back
 
-function getSyncKey() { return (localStorage.getItem('sync_key') || '').trim(); }
+// The Access PIN doubles as the sync credential (sent as X-Sync-Token), so
+// sync is automatic once a device is logged in — no separate key to configure.
+function getSyncKey() { return (localStorage.getItem('app_access_pin') || '1234').trim(); }
 function syncEndpoint(path) {
   return window.location.protocol === 'file:' ? 'http://127.0.0.1:8080' + path : path;
 }
@@ -181,8 +183,8 @@ function syncEndpoint(path) {
   localStorage.setItem = function (key, value) {
     original(key, value);
     if (syncSuspended || SYNC_KEYS.indexOf(key) === -1) return;
+    if (sessionStorage.getItem('authenticated') !== 'true') return; // only sync once logged in
     const token = getSyncKey();
-    if (!token) return; // sync not enabled on this device
     clearTimeout(timers[key]);
     timers[key] = setTimeout(() => {
       fetch(syncEndpoint('/api/save-state'), {
@@ -204,41 +206,17 @@ function syncEndpoint(path) {
   };
 })();
 
-// Pulls the shared dataset from the server into localStorage + state. On the very
-// first run (empty server) it seeds the server from this device instead.
-async function loadStateFromServer() {
-  const token = getSyncKey();
-  if (!token) return; // sync disabled on this device
-  let r, result;
-  try {
-    r = await fetch(syncEndpoint('/api/load-state'), { headers: { 'X-Sync-Token': token } });
-    result = await r.json();
-  } catch (err) {
-    console.warn('Sync load failed:', err);
-    showSyncError('Няма връзка със сървъра за синхронизация. Работите локално.');
-    return;
-  }
-  if (!r.ok || !result || !result.success) {
-    if (r.status === 401 || (result && result.error === 'unauthorized')) {
-      showSyncError('Невалиден ключ за синхронизация.');
-    } else if (result && result.error === 'sync_not_configured') {
-      showSyncError('Синхронизацията не е настроена на сървъра.');
-    }
-    return;
-  }
-
-  const data = result.data || {};
+// Applies the server's shared dataset into localStorage + state. If the server
+// is empty (first run), seeds it from whatever this device already has.
+function applyServerData(data) {
+  data = data || {};
   if (Object.keys(data).length === 0) {
-    // First run: seed the server from whatever this device already has.
     SYNC_KEYS.forEach((k) => {
       const v = localStorage.getItem(k);
-      if (v != null) localStorage.setItem(k, v); // triggers the sync interceptor
+      if (v != null) localStorage.setItem(k, v); // triggers the sync interceptor -> seeds server
     });
-    hideSyncError();
     return;
   }
-
-  // Apply the server's shared data (server is the source of truth).
   syncSuspended = true;
   SYNC_KEYS.forEach((k) => {
     if (data[k] !== undefined && data[k] !== null) {
@@ -247,6 +225,25 @@ async function loadStateFromServer() {
   });
   syncSuspended = false;
   reloadStateFromLocalStorage();
+}
+
+// Pulls the shared dataset from the server (only meaningful once logged in).
+async function loadStateFromServer() {
+  if (sessionStorage.getItem('authenticated') !== 'true') return; // pull only after login
+  let r, result;
+  try {
+    r = await fetch(syncEndpoint('/api/load-state'), { headers: { 'X-Sync-Token': getSyncKey() } });
+    result = await r.json();
+  } catch (err) {
+    console.warn('Sync load failed:', err);
+    showSyncError('Няма връзка със сървъра за синхронизация. Работите локално.');
+    return;
+  }
+  if (!r.ok || !result || !result.success) {
+    if (r.status === 401) showSyncError('PIN кодът не съвпада с този на сървъра.');
+    return;
+  }
+  applyServerData(result.data);
   hideSyncError();
 }
 
@@ -506,7 +503,6 @@ const elements = {
   cloudConvertFormatSelect: document.getElementById('cloudconvert-format-select'),
   appPinInput: document.getElementById('app-pin-input'),
   adminPasswordInput: document.getElementById('admin-password-input'),
-  syncKeyInput: document.getElementById('sync-key-input'),
   btnSyncRefresh: document.getElementById('btn-sync-refresh'),
   
   // Lightbox Modal
@@ -593,9 +589,6 @@ function init() {
   }
   if (elements.adminPasswordInput) {
     elements.adminPasswordInput.value = getAdminPassword();
-  }
-  if (elements.syncKeyInput) {
-    elements.syncKeyInput.value = localStorage.getItem('sync_key') || '';
   }
   
   renderDocumentList();
@@ -4215,27 +4208,35 @@ function setupEventListeners() {
 
   // Real-time Access PIN Sync & Validation
   if (elements.appPinInput) {
-    elements.appPinInput.addEventListener('change', (e) => {
+    elements.appPinInput.addEventListener('change', async (e) => {
       const pin = e.target.value.trim();
+      const oldPin = localStorage.getItem('app_access_pin') || '1234';
       if (!/^\d{4,10}$/.test(pin)) {
         showToast('PIN кодът трябва да бъде между 4 и 10 цифри!', 'alert-triangle');
-        elements.appPinInput.value = localStorage.getItem('app_access_pin') || '1234';
+        elements.appPinInput.value = oldPin;
         return;
       }
+      if (pin === oldPin) return; // no change
+
+      // Update the shared PIN on the server first (authenticated with the current
+      // PIN) so the server and every device stay in agreement.
+      try {
+        const r = await fetch(syncEndpoint('/api/set-pin'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Sync-Token': oldPin },
+          body: JSON.stringify({ value: pin })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.success) throw new Error(j.error || ('HTTP ' + r.status));
+      } catch (err) {
+        console.warn('Set PIN failed:', err);
+        showToast('PIN не е променен (няма връзка със сървъра): ' + (err && err.message ? err.message : 'грешка'), 'alert-circle');
+        elements.appPinInput.value = oldPin;
+        return;
+      }
+
       localStorage.setItem('app_access_pin', pin);
       showToast('PIN кодът е променен.', 'check-circle');
-
-      const dotsContainer = document.querySelector('.pin-dots');
-      if (dotsContainer) {
-        dotsContainer.innerHTML = '';
-        for (let i = 0; i < pin.length; i++) {
-          const span = document.createElement('span');
-          span.classList.add('pin-dot');
-          dotsContainer.appendChild(span);
-        }
-      }
-      
-      initPINAuthentication();
     });
   }
 
@@ -4254,27 +4255,9 @@ function setupEventListeners() {
     });
   }
 
-  // Sync key (per-device). Setting it enables server sync and re-pulls the data.
-  if (elements.syncKeyInput) {
-    elements.syncKeyInput.addEventListener('change', (e) => {
-      localStorage.setItem('sync_key', e.target.value.trim());
-      if (getSyncKey()) {
-        showToast('Ключът за синхронизация е запазен. Зареждане от сървъра...', 'refresh-cw');
-        loadStateFromServer();
-      } else {
-        hideSyncError();
-        showToast('Синхронизацията е изключена на това устройство.', 'info');
-      }
-    });
-  }
-
   // Manual "refresh from server" button (pull another device's changes).
   if (elements.btnSyncRefresh) {
     elements.btnSyncRefresh.addEventListener('click', () => {
-      if (!getSyncKey()) {
-        showToast('Първо въведете ключ за синхронизация в настройките.', 'alert-triangle');
-        return;
-      }
       showToast('Зареждане от сървъра...', 'refresh-cw');
       loadStateFromServer().then(() => showToast('Готово.', 'check-circle'));
     });
@@ -6303,108 +6286,120 @@ function updateMonthlyExpenseTotal() {
 function initPINAuthentication() {
   const overlay = document.getElementById('auth-overlay');
   if (!overlay) return;
-  
-  // If already authenticated, do nothing
+
+  // If already authenticated this session, do nothing.
   if (sessionStorage.getItem('authenticated') === 'true') {
     overlay.classList.add('hidden');
     return;
   }
-  
-  const correctPIN = localStorage.getItem('app_access_pin') || '1234';
-  const targetLength = correctPIN.length;
 
-  // Dynamically generate the dot spans based on the PIN length
-  const dotsContainer = overlay.querySelector('.pin-dots');
-  if (dotsContainer) {
-    dotsContainer.innerHTML = '';
-    for (let i = 0; i < targetLength; i++) {
-      const span = document.createElement('span');
-      span.classList.add('pin-dot');
-      dotsContainer.appendChild(span);
+  // The PIN is validated against the server (it's the shared sync credential),
+  // so a fresh device may not know its length — ask the server, fall back local.
+  const localLen = (localStorage.getItem('app_access_pin') || '1234').length;
+  fetch(syncEndpoint('/api/auth-info'))
+    .then((r) => r.json())
+    .then((info) => buildPinPad(info && info.pinLength ? info.pinLength : localLen))
+    .catch(() => buildPinPad(localLen));
+
+  function grantAccess() {
+    overlay.classList.add('hidden');
+    showToast('Успешен достъп!', 'check-circle');
+    const isMobile = window.innerWidth < 768;
+    const activePanel = state.activePage === 'invoices' ? elements.capturePanelInvoices : (state.activePage === 'documents' ? elements.capturePanelDocs : elements.capturePanelStaff);
+    const activeSrc = state.activePage === 'invoices' ? state.activeSource : (state.activePage === 'documents' ? state.activeSourceDocs : state.activeSourceStaff);
+    if (activeSrc === 'camera' && activePanel && (!activePanel.classList.contains('hidden') || isMobile)) {
+      startCamera();
     }
   }
 
-  let enteredPIN = '';
-  
-  const dots = overlay.querySelectorAll('.pin-dot');
-  const keys = overlay.querySelectorAll('.pin-key');
-  const card = overlay.querySelector('.auth-card');
-  
-  function updateDots() {
-    dots.forEach((dot, index) => {
-      if (index < enteredPIN.length) {
-        dot.classList.add('active');
-      } else {
-        dot.classList.remove('active');
-      }
-    });
-  }
-  
-  function handleKeyPress(val) {
-    if (card.classList.contains('shake')) return;
-    
-    if (val === 'clear') {
-      enteredPIN = '';
-    } else if (val === 'delete') {
-      enteredPIN = enteredPIN.slice(0, -1);
-    } else {
-      if (enteredPIN.length < targetLength) {
-        enteredPIN += val;
+  function buildPinPad(targetLength) {
+    const dotsContainer = overlay.querySelector('.pin-dots');
+    if (dotsContainer) {
+      dotsContainer.innerHTML = '';
+      for (let i = 0; i < targetLength; i++) {
+        const span = document.createElement('span');
+        span.classList.add('pin-dot');
+        dotsContainer.appendChild(span);
       }
     }
-    
-    updateDots();
-    
-    // Check PIN when target length is reached
-    if (enteredPIN.length === targetLength) {
-      if (enteredPIN === correctPIN) {
-        // Authenticated!
-        sessionStorage.setItem('authenticated', 'true');
-        overlay.classList.add('hidden');
-        showToast('Успешен достъп!', 'check-circle');
-        
-        // Start camera if needed
-        const isMobile = window.innerWidth < 768;
-        const activePanel = state.activePage === 'invoices' ? elements.capturePanelInvoices : (state.activePage === 'documents' ? elements.capturePanelDocs : elements.capturePanelStaff);
-        const activeSrc = state.activePage === 'invoices' ? state.activeSource : (state.activePage === 'documents' ? state.activeSourceDocs : state.activeSourceStaff);
-        if (activeSrc === 'camera' && activePanel && (!activePanel.classList.contains('hidden') || isMobile)) {
-          startCamera();
+
+    let enteredPIN = '';
+    let checking = false;
+    const dots = overlay.querySelectorAll('.pin-dot');
+    const keys = overlay.querySelectorAll('.pin-key');
+    const card = overlay.querySelector('.auth-card');
+
+    function updateDots() {
+      dots.forEach((dot, index) => {
+        if (index < enteredPIN.length) dot.classList.add('active');
+        else dot.classList.remove('active');
+      });
+    }
+
+    function rejectPin() {
+      card.classList.add('shake');
+      showToast('Грешен PIN код!', 'alert-triangle');
+      setTimeout(() => {
+        card.classList.remove('shake');
+        enteredPIN = '';
+        updateDots();
+      }, 600);
+    }
+
+    // Validate the PIN against the server. The same load-state call returns the
+    // shared dataset, so a correct login also pulls everything in one round-trip.
+    async function submitPin() {
+      checking = true;
+      const pin = enteredPIN;
+      let r, result;
+      try {
+        r = await fetch(syncEndpoint('/api/load-state'), { headers: { 'X-Sync-Token': pin } });
+        result = await r.json();
+      } catch (e) {
+        // Offline: fall back to the locally cached PIN.
+        const localPin = localStorage.getItem('app_access_pin') || '1234';
+        if (pin === localPin) {
+          sessionStorage.setItem('authenticated', 'true');
+          grantAccess();
+          showSyncError('Офлайн режим: няма връзка със сървъра.');
+        } else {
+          rejectPin();
         }
-      } else {
-        // Wrong PIN: trigger shake animation and reset
-        card.classList.add('shake');
-        showToast('Грешен PIN код!', 'alert-triangle');
-        setTimeout(() => {
-          card.classList.remove('shake');
-          enteredPIN = '';
-          updateDots();
-        }, 600);
+        checking = false;
+        return;
       }
+      if (r.ok && result && result.success) {
+        localStorage.setItem('app_access_pin', pin); // cache for offline + use as sync token
+        sessionStorage.setItem('authenticated', 'true');
+        applyServerData(result.data);
+        hideSyncError();
+        grantAccess();
+      } else {
+        rejectPin();
+      }
+      checking = false;
     }
-  }
-  
-  keys.forEach(key => {
-    key.addEventListener('click', () => {
-      const val = key.dataset.val;
-      handleKeyPress(val);
+
+    function handleKeyPress(val) {
+      if (checking || card.classList.contains('shake')) return;
+      if (val === 'clear') enteredPIN = '';
+      else if (val === 'delete') enteredPIN = enteredPIN.slice(0, -1);
+      else if (enteredPIN.length < targetLength) enteredPIN += val;
+      updateDots();
+      if (enteredPIN.length === targetLength) submitPin();
+    }
+
+    keys.forEach((key) => {
+      key.addEventListener('click', () => handleKeyPress(key.dataset.val));
     });
-  });
-  
-  // Also support physical keyboard inputs
-  document.addEventListener('keydown', (e) => {
-    // If overlay is hidden, don't capture key presses
-    if (overlay.classList.contains('hidden') || sessionStorage.getItem('authenticated') === 'true') {
-      return;
-    }
-    
-    if (e.key >= '0' && e.key <= '9') {
-      handleKeyPress(e.key);
-    } else if (e.key === 'Backspace') {
-      handleKeyPress('delete');
-    } else if (e.key === 'Escape' || e.key === 'c' || e.key === 'C') {
-      handleKeyPress('clear');
-    }
-  });
+
+    document.addEventListener('keydown', (e) => {
+      if (overlay.classList.contains('hidden') || sessionStorage.getItem('authenticated') === 'true') return;
+      if (e.key >= '0' && e.key <= '9') handleKeyPress(e.key);
+      else if (e.key === 'Backspace') handleKeyPress('delete');
+      else if (e.key === 'Escape' || e.key === 'c' || e.key === 'C') handleKeyPress('clear');
+    });
+  }
 }
 
 // Boot application
