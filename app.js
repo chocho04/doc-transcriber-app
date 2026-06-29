@@ -1,271 +1,104 @@
-// Intercept localStorage.setItem to sync state updates to the database
-(function() {
-  const originalSetItem = localStorage.setItem;
-  localStorage.setItem = function(key, value) {
-    originalSetItem.call(localStorage, key, value);
-    
-    const syncKeys = [
-      'saved_documents',
-      'saved_general_documents',
-      'saved_staff',
-      'saved_staff_general_documents',
-      'saved_unattached_staff_docs',
-      'gemini_api_key',
-      'cloudconvert_api_key',
-      'cloudconvert_format',
-      'my_company_name',
-      'app_access_pin',
-      'theme'
-    ];
-    
-    if (syncKeys.includes(key) && typeof state !== 'undefined' && !state.isSyncingSuspended) {
-      syncToDatabase(key, value);
-    }
-  };
-})();
-
+// File-type helpers — work for both base64 data URLs and saved uploads/ URLs.
 function checkIsImage(url) {
   if (!url) return false;
-  return url.startsWith('data:image/') || /\.(jpg|jpeg|png|gif|webp)$/i.test(url);
+  return url.startsWith('data:image/') || /\.(jpg|jpeg|png|gif|webp)(\?|$)/i.test(url);
 }
 function checkIsPdf(url) {
   if (!url) return false;
-  return url.startsWith('data:application/pdf') || /\.pdf$/i.test(url);
+  return url.startsWith('data:application/pdf') || /\.pdf(\?|$)/i.test(url);
 }
 function checkIsText(url) {
   if (!url) return false;
-  return url.startsWith('data:text/') || url.startsWith('data:application/rtf') || /\.(txt|rtf)$/i.test(url);
+  return url.startsWith('data:text/') || url.startsWith('data:application/rtf') || /\.(txt|rtf|csv)(\?|$)/i.test(url);
 }
 
-// Converts a base64 data URL (e.g. "data:image/jpeg;base64,...") into a Blob.
-// Sending a real binary Blob via multipart/form-data avoids ModSecurity/WAF
-// rules that strip long base64 strings, and is ~25% smaller than base64.
-function dataUrlToBlob(dataUrl) {
-  const commaIdx = dataUrl.indexOf(',');
-  const header = dataUrl.substring(0, commaIdx);
-  const data = dataUrl.substring(commaIdx + 1);
-  const mimeMatch = header.match(/data:([^;]+)/);
-  const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
-  const isBase64 = header.includes(';base64');
-  const binary = isBase64 ? atob(data) : decodeURIComponent(data);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return new Blob([bytes], { type: mime });
-}
-
-// Maps a data URL MIME type to a file extension the server allows.
-const MIME_TO_EXT = {
-  'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/pjpeg': 'jpg',
-  'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
-  'application/pdf': 'pdf', 'text/plain': 'txt', 'text/csv': 'csv',
-  'application/rtf': 'rtf', 'text/rtf': 'rtf',
-  'application/msword': 'doc',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
-  'application/vnd.ms-excel': 'xls',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
-  'application/vnd.ms-powerpoint': 'ppt',
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
-  'application/vnd.oasis.opendocument.text': 'odt',
-  'application/vnd.oasis.opendocument.spreadsheet': 'ods',
-  'application/vnd.oasis.opendocument.presentation': 'odp'
-};
-
-// Ensures the upload filename ends with a valid extension. The app stores
-// capturedFileName WITHOUT an extension (and camera captures use names like
-// "Capture 6/29/2026"), which the server's allow-list rejects. We derive the
-// correct extension from the data URL's MIME type.
-function ensureUploadFilename(filename, dataUrl) {
-  const name = (filename || 'file').trim();
-  if (/\.[a-z0-9]{1,5}$/i.test(name)) {
-    return name; // already has an extension
-  }
-  const mimeMatch = dataUrl.match(/^data:([^;,]+)/i);
-  const mime = mimeMatch ? mimeMatch[1].toLowerCase() : '';
-  const ext = MIME_TO_EXT[mime] || 'jpg'; // default to jpg (images are the common case)
-  return `${name}.${ext}`;
-}
-
+// Uploads a base64 data URL to the dev server, which stores it in the uploads/ folder
+// and returns a relative URL (e.g. "uploads/invoice_123.jpg"). On any failure it returns
+// the original base64 so the document is never lost (it just stays inline in localStorage).
 async function uploadFileToServer(base64Data, filename) {
   if (!base64Data || !base64Data.startsWith('data:')) {
-    return base64Data;
+    return base64Data; // already a URL or empty — nothing to upload
   }
   const apiEndpoint = window.location.protocol === 'file:'
     ? 'http://127.0.0.1:8080/api/upload-file'
-    : 'api/upload-file';
+    : '/api/upload-file';
   try {
-    // Send as multipart/form-data with a real binary file part. ModSecurity/WAF
-    // skips inspecting multipart file payloads (it strips raw/base64 bodies), so
-    // this is the transport that reliably passes through this host's firewall.
-    const safeName = ensureUploadFilename(filename, base64Data);
-    const blob = dataUrlToBlob(base64Data);
-    const formData = new FormData();
-    formData.append('file', blob, safeName);
-    formData.append('filename', safeName);
-
-    // Do NOT set Content-Type manually; the browser adds the multipart boundary.
     const response = await fetch(apiEndpoint, {
       method: 'POST',
-      body: formData
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: filename || 'file', base64Data })
     });
     if (!response.ok) {
       let errMsg = `Upload status ${response.status}`;
-      try {
-        const errJson = await response.json();
-        if (errJson && errJson.error) errMsg = errJson.error;
-      } catch (e) {}
+      try { const j = await response.json(); if (j && j.error) errMsg = j.error; } catch (_) {}
       throw new Error(errMsg);
     }
     const result = await response.json();
     if (result && result.success && result.url) {
-      hideSyncError();
       return result.url;
     }
     throw new Error(result.error || 'Unknown upload response');
   } catch (err) {
-    console.warn("File upload failed, falling back to local base64:", err);
-    showSyncError(`Файлът не можа да бъде качен на сървъра (${err && err.message ? err.message : 'грешка'}). Запазен е само в браузъра.`);
+    console.warn('File upload failed, keeping inline base64:', err);
     return base64Data;
   }
 }
 
-function syncToDatabase(key, value) {
-  const route = 'api/save-state';
-  const apiEndpoint = window.location.protocol === 'file:'
-    ? `http://127.0.0.1:8080/${route}`
-    : route;
-
-  // For document arrays, strip large base64 image/file data before syncing.
-  // This keeps payloads small enough to pass through server firewalls (ModSecurity, etc).
-  // Images remain safely stored in localStorage on the client.
-  const keysWithImages = [
-    'saved_documents', 'saved_general_documents', 'saved_staff',
-    'saved_staff_general_documents', 'saved_unattached_staff_docs'
-  ];
-  
-  let syncValue = value;
-  if (keysWithImages.includes(key)) {
-    try {
-      const parsed = JSON.parse(value);
-      if (Array.isArray(parsed)) {
-        const stripped = parsed.map(item => {
-          const clone = { ...item };
-          // Strip base64 image/file data (starts with "data:")
-          if (typeof clone.image === 'string' && clone.image.startsWith('data:')) {
-            clone.image = '[stored_locally]';
-          }
-          // Strip nested file arrays (staff docs, general docs with attachments)
-          if (Array.isArray(clone.documents)) {
-            clone.documents = clone.documents.map(subDoc => {
-              const subClone = { ...subDoc };
-              if (typeof subClone.image === 'string' && subClone.image.startsWith('data:')) {
-                subClone.image = '[stored_locally]';
-              }
-              return subClone;
-            });
-          }
-          if (Array.isArray(clone.files)) {
-            clone.files = clone.files.map(f => {
-              const fClone = { ...f };
-              if (typeof fClone.data === 'string' && fClone.data.startsWith('data:')) {
-                fClone.data = '[stored_locally]';
-              }
-              if (typeof fClone.image === 'string' && fClone.image.startsWith('data:')) {
-                fClone.image = '[stored_locally]';
-              }
-              return fClone;
-            });
-          }
-          return clone;
-        });
-        syncValue = JSON.stringify(stripped);
-      }
-    } catch (e) {
-      // If JSON parse fails, send original value
-    }
+// Best-effort deletion of a previously uploaded file from the server's uploads/
+// folder. Only acts on "uploads/..." URLs — base64/data URLs and external links
+// have no server file. Fire-and-forget: the entry is removed locally regardless.
+function deleteFileFromServer(imageUrl) {
+  if (!imageUrl || typeof imageUrl !== 'string' || !imageUrl.startsWith('uploads/')) {
+    return;
   }
-
+  const apiEndpoint = window.location.protocol === 'file:'
+    ? 'http://127.0.0.1:8080/api/delete-file'
+    : '/api/delete-file';
   fetch(apiEndpoint, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ key, value: syncValue })
-  })
-  .then(async response => {
-    if (!response.ok) {
-      let errMsg = `Status ${response.status}`;
-      try {
-        const errJson = await response.json();
-        if (errJson && errJson.error) {
-          errMsg = errJson.error;
-        }
-      } catch (e) {}
-
-      console.warn(`Database sync failed for key ${key}: ${errMsg}`);
-      showSyncError(`Грешка при запис в базата данни: ${errMsg}`);
-    } else {
-      // A successful sync clears any previously shown banner.
-      hideSyncError();
-    }
-  })
-  .catch(err => {
-    console.warn(`Database sync network error for key ${key}:`, err);
-    showSyncError(`Няма връзка с базата данни: ${err && err.message ? err.message : 'мрежова грешка'}. Данните са запазени само в браузъра.`);
-  });
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: imageUrl })
+  }).catch(err => console.warn('Failed to delete server file:', imageUrl, err));
 }
 
-async function preloadStateFromDatabase() {
-  const apiEndpoint = window.location.protocol === 'file:'
-    ? 'http://127.0.0.1:8080/api/load-state'
-    : 'api/load-state';
-    
-  try {
-    const response = await fetch(apiEndpoint);
-    if (!response.ok) {
-      throw new Error(`State load failed: ${response.status}`);
-    }
-    
-    const result = await response.json();
-    if (result && result.success && result.data) {
-      state.isSyncingSuspended = true;
-      
-      // Merge strategy: only apply server values for keys where local storage is empty.
-      // This prevents stale server data from overwriting newer local data after a failed sync.
-      for (const [key, value] of Object.entries(result.data)) {
-        if (value !== null && value !== undefined) {
-          const localValue = localStorage.getItem(key);
-          if (!localValue || localValue === '[]' || localValue === '{}' || localValue === '') {
-            localStorage.setItem(key, value);
-          }
-        }
-      }
-      
-      // Update memory state properties from localStorage (which now has the merged result)
-      state.apiKey = localStorage.getItem('gemini_api_key') || '';
-      state.cloudConvertApiKey = localStorage.getItem('cloudconvert_api_key') || '';
-      state.cloudConvertFormat = localStorage.getItem('cloudconvert_format') || 'pdf';
-      state.documents = JSON.parse(localStorage.getItem('saved_documents')) || [];
-      state.generalDocs = JSON.parse(localStorage.getItem('saved_general_documents')) || [];
-      state.staff = JSON.parse(localStorage.getItem('saved_staff')) || [];
-      state.unattachedStaffDocs = JSON.parse(localStorage.getItem('saved_unattached_staff_docs')) || [];
-      state.staffGeneralDocs = JSON.parse(localStorage.getItem('saved_staff_general_documents')) || [];
-      state.myCompany = localStorage.getItem('my_company_name') || '';
-      state.theme = localStorage.getItem('theme') || 'dark';
-      
-      state.isSyncingSuspended = false;
-    }
-  } catch (err) {
-    console.warn('Database preload failed, falling back to local client state:', err);
+// The admin password gates deletions AND access to the Settings panel.
+// Defaults to "1234" until the user changes it in Settings (an empty value
+// also falls back to the default, so the gate can never be removed entirely).
+const DEFAULT_ADMIN_PASSWORD = '1234';
+function getAdminPassword() {
+  return (localStorage.getItem('admin_delete_password') || '').trim() || DEFAULT_ADMIN_PASSWORD;
+}
+
+// Becomes true once the admin password is entered this session, so the Settings
+// panel doesn't re-prompt every time it's opened. Resets on page reload.
+let settingsUnlocked = false;
+function unlockSettings() {
+  if (settingsUnlocked) return true;
+  const entered = prompt('Въведете администраторска парола за достъп до настройките:');
+  if (entered === null) return false; // cancelled
+  if (entered.trim() === getAdminPassword()) {
+    settingsUnlocked = true;
+    return true;
   }
+  showToast('Грешна администраторска парола.', 'alert-triangle');
+  return false;
+}
+
+// Gates a delete action behind the admin password. Drop-in replacement for
+// confirm(): returns true only when the user types the correct admin password.
+function confirmDelete(message) {
+  const entered = prompt(`${message}\n\nВъведете администраторска парола, за да изтриете:`);
+  if (entered === null) return false; // cancelled
+  if (entered.trim() === getAdminPassword()) return true;
+  showToast('Грешна администраторска парола. Изтриването е отменено.', 'alert-triangle');
+  return false;
 }
 
 // State Management
 let state = {
   apiKey: localStorage.getItem('gemini_api_key') || '',
   cloudConvertApiKey: localStorage.getItem('cloudconvert_api_key') || '',
-  cloudConvertFormat: localStorage.getItem('cloudconvert_format') || 'pdf',
+  cloudConvertFormat: localStorage.getItem('cloudconvert_format') || 'pdf', // 'pdf' or 'png' — target for unsupported file types
   documents: JSON.parse(localStorage.getItem('saved_documents')) || [],
   generalDocs: JSON.parse(localStorage.getItem('saved_general_documents')) || [],
   staff: JSON.parse(localStorage.getItem('saved_staff')) || [],
@@ -311,9 +144,7 @@ let state = {
   activeTabStaffGen: 'payroll', // 'payroll', 'schedule', or 'other'
   currentPageStaffGen: 1,
   pageSizeStaffGen: 10,
-  staffGeneralDocs: JSON.parse(localStorage.getItem('saved_staff_general_documents')) || [],
-  
-  isSyncingSuspended: false
+  staffGeneralDocs: JSON.parse(localStorage.getItem('saved_staff_general_documents')) || []
 };
 
 // DOM Elements
@@ -477,6 +308,7 @@ const elements = {
   cloudConvertApiKeyBadge: document.getElementById('cloudconvert-api-key-badge'),
   cloudConvertFormatSelect: document.getElementById('cloudconvert-format-select'),
   appPinInput: document.getElementById('app-pin-input'),
+  adminPasswordInput: document.getElementById('admin-password-input'),
   
   // Lightbox Modal
   modalImage: document.getElementById('modal-image'),
@@ -529,15 +361,17 @@ const elements = {
 
 // Initialize Application
 function init() {
-  initPINAuthentication();
-  applyTheme();
-
-  // Allow the user to dismiss the sync-error banner.
-  const syncBannerClose = document.getElementById('sync-banner-close');
-  if (syncBannerClose) {
-    syncBannerClose.addEventListener('click', hideSyncError);
+  // One-time self-heal: an earlier build let the browser autofill the masked
+  // admin field and persist that value, locking users out of Settings with a
+  // password they never set. Clear it once so the "1234" default applies again.
+  // (A user-set password afterwards still persists — this runs only once.)
+  if (!localStorage.getItem('admin_pw_reset_v1')) {
+    localStorage.removeItem('admin_delete_password');
+    localStorage.setItem('admin_pw_reset_v1', '1');
   }
 
+  initPINAuthentication();
+  applyTheme();
   updateApiKeyBadge();
   updateCloudConvertApiKeyBadge();
   migrateOldDocuments();
@@ -558,38 +392,10 @@ function init() {
   if (elements.appPinInput) {
     elements.appPinInput.value = localStorage.getItem('app_access_pin') || '1234';
   }
-  // Ensure search fields are cleared on startup to prevent browser autofill bugs
-  let userInteractedWithSearch = {
-    'search-input': false,
-    'search-input-docs': false,
-    'search-input-staff': false
-  };
-
-  const searchIDs = ['search-input', 'search-input-docs', 'search-input-staff'];
-  searchIDs.forEach(id => {
-    const el = document.getElementById(id);
-    if (el) {
-      el.value = '';
-      el.addEventListener('input', () => userInteractedWithSearch[id] = true);
-      el.addEventListener('focus', () => userInteractedWithSearch[id] = true);
-    }
-  });
-
-  const clearIfAutofilled = () => {
-    searchIDs.forEach(id => {
-      const el = document.getElementById(id);
-      if (el && !userInteractedWithSearch[id] && el.value !== '') {
-        el.value = '';
-        el.dispatchEvent(new Event('input'));
-      }
-    });
-  };
-
-  // Run periodic clear checks over the first 5 seconds to wipe out lazy/async browser autofill
-  [50, 150, 300, 600, 1000, 1500, 2000, 3000, 5000].forEach(delay => {
-    setTimeout(clearIfAutofilled, delay);
-  });
-
+  if (elements.adminPasswordInput) {
+    elements.adminPasswordInput.value = getAdminPassword();
+  }
+  
   renderDocumentList();
   renderGeneralDocumentList();
   renderStaffList();
@@ -608,7 +414,7 @@ function init() {
   
   const activePanel = state.activePage === 'invoices' ? elements.capturePanelInvoices : (state.activePage === 'documents' ? elements.capturePanelDocs : elements.capturePanelStaff);
   const activeSrc = state.activePage === 'invoices' ? state.activeSource : (state.activePage === 'documents' ? state.activeSourceDocs : state.activeSourceStaff);
-  const isAuthenticated = localStorage.getItem('authenticated') === 'true';
+  const isAuthenticated = sessionStorage.getItem('authenticated') === 'true';
   if (isAuthenticated && activeSrc === 'camera' && activePanel && (!activePanel.classList.contains('hidden') || isMobile)) {
     startCamera();
   } else {
@@ -1377,7 +1183,7 @@ function rotateImage90DegreesStaff() {
 }
 
 function handleFileDocs(file) {
-  if (shouldConvertFile(file)) {
+  if (shouldConvertToPdf(file)) {
     elements.imagePreviewDocs.src = '';
     elements.imagePreviewDocs.classList.add('hidden');
     elements.btnRotatePreviewDocs.classList.add('hidden');
@@ -1390,15 +1196,13 @@ function handleFileDocs(file) {
     const placeholder = document.createElement('div');
     placeholder.id = 'pdf-preview-placeholder-docs';
     placeholder.className = 'document-preview-placeholder';
-    const targetFormat = state.cloudConvertFormat || 'pdf';
-    const formatLabel = targetFormat.toUpperCase();
     placeholder.innerHTML = `
       <div class="doc-placeholder-icon">
         <i data-lucide="loader-2" class="animate-spin"></i>
       </div>
       <div class="doc-placeholder-info">
         <div class="doc-placeholder-name" title="${escapeHTML(file.name)}">${escapeHTML(file.name)}</div>
-        <div class="doc-placeholder-size">Конвертиране в ${formatLabel}...</div>
+        <div class="doc-placeholder-size">Конвертиране в ${state.cloudConvertFormat === 'png' ? 'PNG' : 'PDF'}...</div>
       </div>
     `;
     
@@ -1410,9 +1214,9 @@ function handleFileDocs(file) {
       window.lucide.createIcons();
     }
     
-    convertFile(file)
-      .then(convertedFile => {
-        handleFileDocs(convertedFile);
+    convertFileToPdf(file)
+      .then(pdfFile => {
+        handleFileDocs(pdfFile);
       })
       .catch(err => {
         const formatName = file.name.substring(file.name.lastIndexOf('.')).toUpperCase().substring(1);
@@ -1508,7 +1312,7 @@ function handleFileDocs(file) {
 }
 
 function handleFileStaff(file) {
-  if (shouldConvertFile(file)) {
+  if (shouldConvertToPdf(file)) {
     elements.imagePreviewStaff.src = '';
     elements.imagePreviewStaff.classList.add('hidden');
     elements.btnRotatePreviewStaff.classList.add('hidden');
@@ -1521,15 +1325,13 @@ function handleFileStaff(file) {
     const placeholder = document.createElement('div');
     placeholder.id = 'pdf-preview-placeholder-staff';
     placeholder.className = 'document-preview-placeholder';
-    const targetFormat = state.cloudConvertFormat || 'pdf';
-    const formatLabel = targetFormat.toUpperCase();
     placeholder.innerHTML = `
       <div class="doc-placeholder-icon">
         <i data-lucide="loader-2" class="animate-spin"></i>
       </div>
       <div class="doc-placeholder-info">
         <div class="doc-placeholder-name" title="${escapeHTML(file.name)}">${escapeHTML(file.name)}</div>
-        <div class="doc-placeholder-size">Конвертиране в ${formatLabel}...</div>
+        <div class="doc-placeholder-size">Конвертиране в ${state.cloudConvertFormat === 'png' ? 'PNG' : 'PDF'}...</div>
       </div>
     `;
     
@@ -1541,9 +1343,9 @@ function handleFileStaff(file) {
       window.lucide.createIcons();
     }
     
-    convertFile(file)
-      .then(convertedFile => {
-        handleFileStaff(convertedFile);
+    convertFileToPdf(file)
+      .then(pdfFile => {
+        handleFileStaff(pdfFile);
       })
       .catch(err => {
         const formatName = file.name.substring(file.name.lastIndexOf('.')).toUpperCase().substring(1);
@@ -1649,7 +1451,7 @@ async function saveTranscription(parsedResult) {
   const isInvoiceKeyword = name.toLowerCase().includes('фактура') || 
                             (parsedResult.supplier && parsedResult.supplier.toLowerCase().includes('фактура'));
   
-  const isTaxesKeyword = name.toLowerCase().match(/(danък|осигуровки|данъци|ддс декларация|нп|tax|social security|insurance)/) ||
+  const isTaxesKeyword = name.toLowerCase().match(/(данък|осигуровки|данъци|ддс декларация|нп|tax|social security|insurance)/) ||
                          (parsedResult.supplier && parsedResult.supplier.toLowerCase().match(/(данък|осигуровки|данъци|ддс декларация|нп|tax|social security|insurance)/));
                              
   const isBillsKeyword = name.toLowerCase().match(/(ток|вода|интернет|парно|телефон|сметка|сметки|битова|услуга|услуги|такса|такси|а1|виваком|йеттел|yettel|vivacom|електрохолд|evn|енерго|софийска вода|bill|utility|utilities|service|services)/) ||
@@ -1674,9 +1476,6 @@ async function saveTranscription(parsedResult) {
     finalType = 'revenue-invoice';
   }
   
-  // Upload base64 image to server first, if available
-  const imageUrl = await uploadFileToServer(state.capturedImageBase64, state.capturedFileName || 'invoice.jpg');
-  
   const newDoc = {
     id: 'doc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
     name: name,
@@ -1686,7 +1485,7 @@ async function saveTranscription(parsedResult) {
     products: parsedResult.products || [],
     totalAmount: parsedResult.totalAmount != null ? parseFloat(parsedResult.totalAmount) : null,
     type: finalType,
-    image: imageUrl,
+    image: await uploadFileToServer(state.capturedImageBase64, state.capturedFileName || 'invoice'),
     timestamp: Date.now()
   };
   
@@ -1712,15 +1511,12 @@ async function saveTranscription(parsedResult) {
 
 async function saveGeneralDocTranscription(parsedResult) {
   const name = parsedResult.name || state.capturedFileNameDocs || 'Untitled Document';
-  
-  // Upload base64 image to server first, if available
-  const imageUrl = await uploadFileToServer(state.capturedImageBase64Docs, state.capturedFileNameDocs || 'document.jpg');
-  
+
   const newDoc = {
     id: 'gdoc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
     name: name,
     type: parsedResult.type || 'other',
-    image: imageUrl,
+    image: await uploadFileToServer(state.capturedImageBase64Docs, state.capturedFileNameDocs || 'document'),
     issueDate: normalizeDate(parsedResult.issueDate) || new Date().toISOString().slice(0, 10),
     expiryDate: normalizeDate(parsedResult.expiryDate),
     supplier: parsedResult.supplier || null,
@@ -1748,10 +1544,10 @@ async function saveStaffDocTranscription(parsedResult) {
   const category = parsedResult.docCategory || 'other';
   const docName = parsedResult.docName || state.capturedFileNameStaff || 'Документ';
   const issueDate = normalizeDate(parsedResult.issueDate) || new Date().toISOString().slice(0, 10);
-  
-  // Upload base64 image to server first, if available
-  const imageUrl = await uploadFileToServer(state.capturedImageBase64Staff, state.capturedFileNameStaff || 'staff_doc.jpg');
-  
+
+  // Save the file into uploads/ once; reuse the returned URL for whichever bucket it lands in.
+  const imageUrl = await uploadFileToServer(state.capturedImageBase64Staff, state.capturedFileNameStaff || 'staff_doc');
+
   if (category === 'payroll' || category === 'schedule' || (category === 'other' && !parsedResult.employeeName)) {
     // Save to general staff documents
     const newGenDoc = {
@@ -1843,6 +1639,8 @@ async function saveStaffDocTranscription(parsedResult) {
 }
 
 function deleteGeneralDocument(id) {
+  const doc = state.generalDocs.find(d => d.id === id);
+  if (doc) deleteFileFromServer(doc.image);
   state.generalDocs = state.generalDocs.filter(d => d.id !== id);
   localStorage.setItem('saved_general_documents', JSON.stringify(state.generalDocs));
   renderGeneralDocumentList();
@@ -1851,6 +1649,10 @@ function deleteGeneralDocument(id) {
 }
 
 function deleteStaffPerson(personId) {
+  const person = state.staff.find(p => p.id === personId);
+  if (person && Array.isArray(person.documents)) {
+    person.documents.forEach(d => deleteFileFromServer(d.image));
+  }
   state.staff = state.staff.filter(p => p.id !== personId);
   localStorage.setItem('saved_staff', JSON.stringify(state.staff));
   renderStaffList();
@@ -1860,6 +1662,8 @@ function deleteStaffPerson(personId) {
 function deleteStaffDocument(personId, docId) {
   const person = state.staff.find(p => p.id === personId);
   if (person) {
+    const sub = person.documents.find(d => d.id === docId);
+    if (sub) deleteFileFromServer(sub.image);
     person.documents = person.documents.filter(d => d.id !== docId);
     localStorage.setItem('saved_staff', JSON.stringify(state.staff));
     renderStaffList();
@@ -1945,7 +1749,9 @@ function attachUnattachedDoc(docId, optionValue) {
 }
 
 function deleteUnattachedDoc(docId) {
-  if (confirm('Наистина ли искате да изтриете този неприкачен документ?')) {
+  if (confirmDelete('Наистина ли искате да изтриете този неприкачен документ?')) {
+    const doc = state.unattachedStaffDocs.find(d => d.id === docId);
+    if (doc) deleteFileFromServer(doc.image);
     state.unattachedStaffDocs = state.unattachedStaffDocs.filter(d => d.id !== docId);
     localStorage.setItem('saved_unattached_staff_docs', JSON.stringify(state.unattachedStaffDocs));
     renderStaffList();
@@ -1954,6 +1760,8 @@ function deleteUnattachedDoc(docId) {
 }
 
 function deleteDocument(id) {
+  const target = state.documents.find(doc => doc.id === id);
+  if (target) deleteFileFromServer(target.image);
   state.documents = state.documents.filter(doc => doc.id !== id);
   localStorage.setItem('saved_documents', JSON.stringify(state.documents));
   renderDocumentList();
@@ -1962,7 +1770,8 @@ function deleteDocument(id) {
 }
 
 function clearAllDocuments() {
-  if (confirm('Наистина ли искате да изтриете всички записани документи? Това действие е необратимо.')) {
+  if (confirmDelete('Наистина ли искате да изтриете всички записани документи? Това действие е необратимо.')) {
+    state.documents.forEach(d => deleteFileFromServer(d.image));
     state.documents = [];
     localStorage.setItem('saved_documents', JSON.stringify(state.documents));
     renderDocumentList();
@@ -2293,7 +2102,7 @@ function renderDocumentList() {
     }
     item.querySelector('.btn-row-delete').addEventListener('click', (e) => {
       e.stopPropagation();
-      if (confirm('Наистина ли искате да изтриете тази фактура?')) {
+      if (confirmDelete('Наистина ли искате да изтриете тази фактура?')) {
         deleteDocument(doc.id);
       }
     });
@@ -2692,7 +2501,7 @@ function renderGeneralDocumentList() {
     });
     item.querySelector('.btn-row-delete-doc').addEventListener('click', (e) => {
       e.stopPropagation();
-      if (confirm('Наистина ли искате да изтриете този документ?')) {
+      if (confirmDelete('Наистина ли искате да изтриете този документ?')) {
         deleteGeneralDocument(doc.id);
       }
     });
@@ -3077,7 +2886,7 @@ function setupStaffItemEvents(item, person) {
   if (deleteBtn) {
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (confirm(`Наистина ли искате да изтриете служителя ${person.name} и всички негови документи?`)) {
+      if (confirmDelete(`Наистина ли искате да изтриете служителя ${person.name} и всички негови документи?`)) {
         deleteStaffPerson(person.id);
       }
     });
@@ -3243,7 +3052,7 @@ function renderStaffGeneralDocsList() {
     // Delete action
     item.querySelector('.btn-delete-staff-gen').addEventListener('click', (e) => {
       e.stopPropagation();
-      if (confirm('Наистина ли искате да изтриете този документ?')) {
+      if (confirmDelete('Наистина ли искате да изтриете този документ?')) {
         deleteStaffGeneralDocument(doc.id);
       }
     });
@@ -3256,6 +3065,8 @@ function renderStaffGeneralDocsList() {
 }
 
 function deleteStaffGeneralDocument(id) {
+  const target = state.staffGeneralDocs.find(doc => doc.id === id);
+  if (target) deleteFileFromServer(target.image);
   state.staffGeneralDocs = state.staffGeneralDocs.filter(doc => doc.id !== id);
   try {
     localStorage.setItem('saved_staff_general_documents', JSON.stringify(state.staffGeneralDocs));
@@ -3391,7 +3202,7 @@ function renderStaffPersonDocs(person, docsList) {
     
     docRow.querySelector('.btn-delete-staff-doc').addEventListener('click', (e) => {
       e.stopPropagation();
-      if (confirm('Наистина ли искате да изтриете този документ?')) {
+      if (confirmDelete('Наистина ли искате да изтриете този документ?')) {
         deleteStaffDocument(person.id, doc.id);
         renderStaffPersonDocs(person, docsList);
         renderStaffList();
@@ -3824,17 +3635,6 @@ function updateApiKeyBadge() {
   if (window.lucide) window.lucide.createIcons();
 }
 
-function showSettingsPanelAndFocusKey() {
-  if (elements.backupPanel) {
-    elements.backupPanel.classList.remove('hidden');
-  }
-  if (elements.apiKeyInput) {
-    elements.apiKeyInput.focus();
-    elements.apiKeyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }
-  showToast('Моля, конфигурирайте първо вашия Gemini API ключ.', 'key');
-}
-
 function updateCloudConvertApiKeyBadge() {
   const isKeyConfigured = state.cloudConvertApiKey && state.cloudConvertApiKey.length > 10;
   
@@ -3851,7 +3651,20 @@ function updateCloudConvertApiKeyBadge() {
   if (window.lucide) window.lucide.createIcons();
 }
 
+function showSettingsPanelAndFocusKey() {
+  if (!unlockSettings()) return;
+  if (elements.backupPanel) {
+    elements.backupPanel.classList.remove('hidden');
+  }
+  if (elements.apiKeyInput) {
+    elements.apiKeyInput.focus();
+    elements.apiKeyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  showToast('Моля, конфигурирайте първо вашия Gemini API ключ.', 'key');
+}
+
 function showSettingsPanelAndFocusCloudConvertKey() {
+  if (!unlockSettings()) return;
   if (elements.backupPanel) {
     elements.backupPanel.classList.remove('hidden');
   }
@@ -3925,15 +3738,16 @@ function openFileInModal(base64DataUrl, fileName) {
   
   caption.textContent = fileName;
   
-  const isImage = base64DataUrl && checkIsImage(base64DataUrl);
-  const isPdf = base64DataUrl && checkIsPdf(base64DataUrl);
-  const isText = base64DataUrl && checkIsText(base64DataUrl);
-  
+  const isImage = checkIsImage(base64DataUrl);
+  const isPdf = checkIsPdf(base64DataUrl);
+  const isText = checkIsText(base64DataUrl);
+  const isDataUrl = base64DataUrl && base64DataUrl.startsWith('data:');
+
   if (isImage) {
     img.src = base64DataUrl;
     img.classList.remove('hidden');
   } else if (isPdf) {
-    if (base64DataUrl.startsWith('data:')) {
+    if (isDataUrl) {
       try {
         const parts = base64DataUrl.split(';base64,');
         const contentType = parts[0].split(':')[1];
@@ -3945,48 +3759,39 @@ function openFileInModal(base64DataUrl, fileName) {
         }
         const blob = new Blob([uInt8Array], { type: contentType });
         activeLightboxBlobUrl = URL.createObjectURL(blob);
-        
+
         iframe.src = activeLightboxBlobUrl;
-        iframe.classList.remove('hidden');
       } catch (e) {
         console.error("Failed to render PDF in iframe", e);
         iframe.src = base64DataUrl;
-        iframe.classList.remove('hidden');
       }
     } else {
+      // Saved uploads/ URL — let the dev server serve it directly.
       iframe.src = base64DataUrl;
-      iframe.classList.remove('hidden');
     }
+    iframe.classList.remove('hidden');
   } else if (isText) {
-    if (base64DataUrl.startsWith('data:')) {
+    if (isDataUrl) {
       try {
         const parts = base64DataUrl.split(';base64,');
         const decodedText = decodeURIComponent(escape(window.atob(parts[1])));
         textContainer.textContent = decodedText;
-        textContainer.classList.remove('hidden');
       } catch (e) {
         try {
           const parts = base64DataUrl.split(';base64,');
-          const decodedText = window.atob(parts[1]);
-          textContainer.textContent = decodedText;
-          textContainer.classList.remove('hidden');
+          textContainer.textContent = window.atob(parts[1]);
         } catch (err) {
           textContainer.textContent = "Неуспешно зареждане на текстовия файл.";
-          textContainer.classList.remove('hidden');
         }
       }
+      textContainer.classList.remove('hidden');
     } else {
-      // Fetch text from server
+      // Saved uploads/ URL — fetch the text content from the server.
       fetch(base64DataUrl)
         .then(r => r.text())
-        .then(txt => {
-          textContainer.textContent = txt;
-          textContainer.classList.remove('hidden');
-        })
-        .catch(err => {
-          textContainer.textContent = "Неуспешно зареждане на текстовия файл.";
-          textContainer.classList.remove('hidden');
-        });
+        .then(t => { textContainer.textContent = t; })
+        .catch(() => { textContainer.textContent = "Неуспешно зареждане на текстовия файл."; });
+      textContainer.classList.remove('hidden');
     }
   } else {
     // Show download button fallback
@@ -4191,16 +3996,14 @@ function setupEventListeners() {
     });
   }
 
-  // Real-time CloudConvert Target Format Selection Sync
+  // Real-time conversion output-format sync (PDF vs PNG image)
   if (elements.cloudConvertFormatSelect) {
     elements.cloudConvertFormatSelect.addEventListener('change', (e) => {
-      const format = e.target.value;
-      state.cloudConvertFormat = format;
-      localStorage.setItem('cloudconvert_format', format);
+      const fmt = e.target.value === 'png' ? 'png' : 'pdf';
+      state.cloudConvertFormat = fmt;
+      localStorage.setItem('cloudconvert_format', fmt);
     });
   }
-
-
 
   // Real-time Access PIN Sync & Validation
   if (elements.appPinInput) {
@@ -4214,6 +4017,11 @@ function setupEventListeners() {
       localStorage.setItem('app_access_pin', pin);
       showToast('PIN кодът е променен.', 'check-circle');
       
+      const authHint = document.querySelector('.auth-hint');
+      if (authHint) {
+        authHint.textContent = `За развойна среда: PIN е ${pin}`;
+      }
+      
       const dotsContainer = document.querySelector('.pin-dots');
       if (dotsContainer) {
         dotsContainer.innerHTML = '';
@@ -4225,6 +4033,21 @@ function setupEventListeners() {
       }
       
       initPINAuthentication();
+    });
+  }
+
+  // Admin password sync (gates deletions + Settings access). Saved per-device,
+  // not included in backups. Empty reverts to the default "1234".
+  if (elements.adminPasswordInput) {
+    elements.adminPasswordInput.addEventListener('change', (e) => {
+      const pwd = e.target.value.trim();
+      localStorage.setItem('admin_delete_password', pwd);
+      if (!pwd) {
+        elements.adminPasswordInput.value = DEFAULT_ADMIN_PASSWORD;
+        showToast(`Паролата е върната по подразбиране (${DEFAULT_ADMIN_PASSWORD}).`, 'info');
+      } else {
+        showToast('Администраторската парола е променена.', 'check-circle');
+      }
     });
   }
 
@@ -4302,15 +4125,19 @@ function setupEventListeners() {
     });
   });
 
-  // Settings Gear Trigger (Footer Collapse/Expand)
-  const btnSettingsGear = elements.btnSettingsGear;
-  if (btnSettingsGear) {
-    btnSettingsGear.addEventListener('click', () => {
-      if (elements.backupPanel) {
-        elements.backupPanel.classList.toggle('hidden');
+  // Settings Gear Trigger (Footer Collapse/Expand) — gated by the admin password.
+  document.querySelectorAll('.btn-settings-gear').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (!elements.backupPanel) return;
+      const opening = elements.backupPanel.classList.contains('hidden');
+      if (opening) {
+        if (!unlockSettings()) return; // require admin password to open
+        elements.backupPanel.classList.remove('hidden');
+      } else {
+        elements.backupPanel.classList.add('hidden'); // closing needs no password
       }
     });
-  }
+  });
 
   // Mobile Camera Capture Actions
   const btnMobileCamera = document.getElementById('btn-mobile-camera');
@@ -4579,7 +4406,7 @@ function setupEventListeners() {
   // Delete document from detail pane
   elements.btnDeleteDoc.addEventListener('click', () => {
     if (state.currentlyViewingDocId) {
-      if (confirm('Наистина ли искате да изтриете този документ?')) {
+      if (confirmDelete('Наистина ли искате да изтриете този документ?')) {
         deleteDocument(state.currentlyViewingDocId);
       }
     }
@@ -4677,7 +4504,7 @@ function setupEventListeners() {
     if (target) {
       const id = target.dataset.id;
       const doc = state.documents.find(d => d.id === id);
-      if (doc && doc.image && checkIsImage(doc.image)) {
+      if (doc && checkIsImage(doc.image)) {
         elements.hoverPreviewImg.src = doc.image;
         elements.hoverPreview.classList.remove('hidden');
       }
@@ -4980,7 +4807,8 @@ function setupEventListeners() {
 
   if (elements.btnClearAllDocs) {
     elements.btnClearAllDocs.addEventListener('click', () => {
-      if (confirm('Наистина ли искате да изтриете всички записани документи в този раздел?')) {
+      if (confirmDelete('Наистина ли искате да изтриете всички записани документи в този раздел?')) {
+        state.generalDocs.forEach(d => deleteFileFromServer(d.image));
         state.generalDocs = [];
         localStorage.setItem('saved_general_documents', JSON.stringify(state.generalDocs));
         renderGeneralDocumentList();
@@ -5104,7 +4932,7 @@ function setupEventListeners() {
   if (elements.btnDeleteDocGeneral) {
     elements.btnDeleteDocGeneral.addEventListener('click', () => {
       if (state.currentlyViewingDocIdDocs) {
-        if (confirm('Наистина ли искате да изтриете този документ?')) {
+        if (confirmDelete('Наистина ли искате да изтриете този документ?')) {
           deleteGeneralDocument(state.currentlyViewingDocIdDocs);
         }
       }
@@ -5144,7 +4972,7 @@ function setupEventListeners() {
       if (target) {
         const id = target.dataset.id;
         const doc = state.generalDocs.find(d => d.id === id);
-        if (doc && doc.image && checkIsImage(doc.image)) {
+        if (doc && checkIsImage(doc.image)) {
           elements.hoverPreviewImg.src = doc.image;
           elements.hoverPreview.classList.remove('hidden');
         }
@@ -5294,7 +5122,7 @@ function setupEventListeners() {
   if (elements.btnDeleteStaffDocSub) {
     elements.btnDeleteStaffDocSub.addEventListener('click', () => {
       if (state.currentlyViewingStaffPersonId && state.currentlyViewingStaffDocId) {
-        if (confirm('Наистина ли искате да изтриете този документ?')) {
+        if (confirmDelete('Наистина ли искате да изтриете този документ?')) {
           deleteStaffDocument(state.currentlyViewingStaffPersonId, state.currentlyViewingStaffDocId);
           closeModal(elements.modalStaffDocDetails);
         }
@@ -5660,19 +5488,18 @@ function readFileAsDataURL(file) {
 }
 
 /**
- * Checks if a file has an unsupported extension that requires conversion.
+ * Converts a local RTF or DOC File object to a PDF File object using the dev server API.
+ * @param {File} file - The File object (.rtf or .doc).
+ * @returns {Promise<File>} - Resolves with the converted PDF File object.
  */
-function shouldConvertFile(file) {
+function shouldConvertToPdf(file) {
   if (!file || !file.name) return false;
   const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
-  const convertFormats = ['.rtf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.odt', '.ods', '.odp'];
+  const convertFormats = ['.rtf', '.doc', '.xls', '.ppt', '.pptx', '.odt', '.ods', '.odp'];
   return convertFormats.includes(ext);
 }
 
-/**
- * Converts a document to target format (pdf or png) using the server API.
- */
-async function convertFile(file) {
+async function convertFileToPdf(file) {
   const apiKey = (state.cloudConvertApiKey || '').trim();
   if (!apiKey) {
     showSettingsPanelAndFocusCloudConvertKey();
@@ -5681,12 +5508,14 @@ async function convertFile(file) {
   }
 
   const base64Data = await readFileAsDataURL(file);
-  const targetFormat = state.cloudConvertFormat || 'pdf';
-  
+
+  // User-selected target format for files Gemini can't read natively.
+  const outputFormat = state.cloudConvertFormat === 'png' ? 'png' : 'pdf';
+
   const apiEndpoint = window.location.protocol === 'file:'
     ? `http://127.0.0.1:8080/api/convert-to-pdf`
-    : 'api/convert-to-pdf';
-    
+    : '/api/convert-to-pdf';
+
   const response = await fetch(apiEndpoint, {
     method: 'POST',
     headers: {
@@ -5696,10 +5525,10 @@ async function convertFile(file) {
       filename: file.name,
       base64Data: base64Data,
       cloudConvertApiKey: apiKey,
-      targetFormat: targetFormat
+      outputFormat: outputFormat
     })
   });
-  
+
   if (!response.ok) {
     let errMsg = `Грешка при конвертиране (${response.status})`;
     try {
@@ -5708,15 +5537,16 @@ async function convertFile(file) {
     } catch (_) {}
     throw new Error(errMsg);
   }
-  
+
   const result = await response.json();
   if (!result.success || !result.base64Data) {
     throw new Error(result.error || 'Неизвестна грешка при конвертирането.');
   }
-  
+
   const convertedBase64 = result.base64Data;
   const parts = convertedBase64.split(';base64,');
-  const contentType = parts[0].split(':')[1] || (targetFormat === 'png' ? 'image/png' : 'application/pdf');
+  const fallbackType = outputFormat === 'png' ? 'image/png' : 'application/pdf';
+  const contentType = parts[0].split(':')[1] || fallbackType;
   const byteCharacters = atob(parts[1]);
   const byteNumbers = new Array(byteCharacters.length);
   for (let i = 0; i < byteCharacters.length; i++) {
@@ -5724,15 +5554,13 @@ async function convertFile(file) {
   }
   const byteArray = new Uint8Array(byteNumbers);
   const blob = new Blob([byteArray], { type: contentType });
-  
+
   const lastDotIndex = file.name.lastIndexOf('.');
   const baseName = lastDotIndex !== -1 ? file.name.substring(0, lastDotIndex) : file.name;
-  const outputName = `${baseName}.${targetFormat}`;
-  
-  return new File([blob], outputName, { type: contentType });
+  const convertedName = `${baseName}.${outputFormat}`;
+
+  return new File([blob], convertedName, { type: contentType });
 }
-
-
 
 
 /**
@@ -5797,12 +5625,10 @@ async function processMultipleFiles(files, viewType) {
 
     try {
       let fileToProcess = file;
-      if (shouldConvertFile(file)) {
-        const targetFormat = state.cloudConvertFormat || 'pdf';
-        const formatLabel = targetFormat.toUpperCase();
+      if (shouldConvertToPdf(file)) {
         btnElement.innerHTML = `<i data-lucide="loader-2" class="animate-spin"></i> <span>Конвертиране ${fileNum}/${total}: ${escapeHTML(file.name.length > 15 ? file.name.substring(0, 12) + '...' : file.name)}</span>`;
         if (window.lucide) window.lucide.createIcons();
-        fileToProcess = await convertFile(file);
+        fileToProcess = await convertFileToPdf(file);
         
         btnElement.innerHTML = `<i data-lucide="loader-2" class="animate-spin"></i> <span>Файл ${fileNum}/${total}: ${escapeHTML(fileToProcess.name.length > 25 ? fileToProcess.name.substring(0, 22) + '...' : fileToProcess.name)}</span>`;
         if (window.lucide) window.lucide.createIcons();
@@ -5850,7 +5676,7 @@ async function processMultipleFiles(files, viewType) {
 
 // File Reader Helper
 function handleFile(file) {
-  if (shouldConvertFile(file)) {
+  if (shouldConvertToPdf(file)) {
     elements.imagePreview.src = '';
     elements.imagePreview.classList.add('hidden');
     elements.btnRotatePreview.classList.add('hidden');
@@ -5863,15 +5689,13 @@ function handleFile(file) {
     const placeholder = document.createElement('div');
     placeholder.id = 'pdf-preview-placeholder';
     placeholder.className = 'document-preview-placeholder';
-    const targetFormat = state.cloudConvertFormat || 'pdf';
-    const formatLabel = targetFormat.toUpperCase();
     placeholder.innerHTML = `
       <div class="doc-placeholder-icon">
         <i data-lucide="loader-2" class="animate-spin"></i>
       </div>
       <div class="doc-placeholder-info">
         <div class="doc-placeholder-name" title="${escapeHTML(file.name)}">${escapeHTML(file.name)}</div>
-        <div class="doc-placeholder-size">Конвертиране в ${formatLabel}...</div>
+        <div class="doc-placeholder-size">Конвертиране в ${state.cloudConvertFormat === 'png' ? 'PNG' : 'PDF'}...</div>
       </div>
     `;
     
@@ -5883,9 +5707,9 @@ function handleFile(file) {
       window.lucide.createIcons();
     }
     
-    convertFile(file)
-      .then(convertedFile => {
-        handleFile(convertedFile);
+    convertFileToPdf(file)
+      .then(pdfFile => {
+        handleFile(pdfFile);
       })
       .catch(err => {
         const formatName = file.name.substring(file.name.lastIndexOf('.')).toUpperCase().substring(1);
@@ -5985,23 +5809,6 @@ function getIconForMime(base64Str) {
 // ==========================================
 
 let toastTimeout;
-// Persistent database-sync error banner.
-// Unlike showToast (auto-hides in 4s), this stays until a sync succeeds
-// or the user dismisses it, so background sync failures aren't missed.
-function showSyncError(message) {
-  const banner = document.getElementById('sync-banner');
-  const msgEl = document.getElementById('sync-banner-message');
-  if (!banner || !msgEl) return;
-  msgEl.textContent = message;
-  banner.classList.remove('hidden');
-  if (window.lucide) window.lucide.createIcons();
-}
-
-function hideSyncError() {
-  const banner = document.getElementById('sync-banner');
-  if (banner) banner.classList.add('hidden');
-}
-
 function showToast(message, iconName = 'info') {
   clearTimeout(toastTimeout);
   
@@ -6133,7 +5940,6 @@ function handleRestoreFile(file) {
               if (data.cloudconvert_format !== undefined) {
                 localStorage.setItem('cloudconvert_format', data.cloudconvert_format);
               }
-
               if (data.theme !== undefined) {
                 localStorage.setItem('theme', data.theme);
               }
@@ -6236,13 +6042,18 @@ function initPINAuthentication() {
   if (!overlay) return;
   
   // If already authenticated, do nothing
-  if (localStorage.getItem('authenticated') === 'true') {
+  if (sessionStorage.getItem('authenticated') === 'true') {
     overlay.classList.add('hidden');
     return;
   }
   
   const correctPIN = localStorage.getItem('app_access_pin') || '1234';
   const targetLength = correctPIN.length;
+
+  const authHint = overlay.querySelector('.auth-hint');
+  if (authHint) {
+    authHint.textContent = `За развойна среда: PIN е ${correctPIN}`;
+  }
   
   // Dynamically generate the dot spans based on the PIN length
   const dotsContainer = overlay.querySelector('.pin-dots');
@@ -6290,7 +6101,7 @@ function initPINAuthentication() {
     if (enteredPIN.length === targetLength) {
       if (enteredPIN === correctPIN) {
         // Authenticated!
-        localStorage.setItem('authenticated', 'true');
+        sessionStorage.setItem('authenticated', 'true');
         overlay.classList.add('hidden');
         showToast('Успешен достъп!', 'check-circle');
         
@@ -6324,7 +6135,7 @@ function initPINAuthentication() {
   // Also support physical keyboard inputs
   document.addEventListener('keydown', (e) => {
     // If overlay is hidden, don't capture key presses
-    if (overlay.classList.contains('hidden') || localStorage.getItem('authenticated') === 'true') {
+    if (overlay.classList.contains('hidden') || sessionStorage.getItem('authenticated') === 'true') {
       return;
     }
     
@@ -6338,12 +6149,5 @@ function initPINAuthentication() {
   });
 }
 
-// Boot application with database preload
-document.addEventListener('DOMContentLoaded', async () => {
-  try {
-    await preloadStateFromDatabase();
-  } catch (err) {
-    console.warn('Database preload failed, falling back to local client state:', err);
-  }
-  init();
-});
+// Boot application
+document.addEventListener('DOMContentLoaded', init);

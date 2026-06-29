@@ -1,0 +1,5 @@
+# User-uploaded files saved by the dev server (server.py /api/upload-file)
+/uploads/
+
+# Python bytecode cache
+__pycache__/

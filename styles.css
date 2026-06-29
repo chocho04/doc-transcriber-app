@@ -267,6 +267,28 @@ body {
   box-shadow: 0 0 0 3px rgb(0 210 255 / 15%);
 }
 
+/* The <select> variant (e.g. PDF/Image conversion toggle) needs an explicit
+   themed background — a transparent select and its native option list render
+   white in dark mode. Also swap the native arrow for a themed chevron. */
+select.header-company-input {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  cursor: pointer;
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+  background-size: 1rem;
+  padding-right: 2rem;
+}
+
+select.header-company-input option {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
 /* Modal Select Dropdown */
 .modal-select {
   width: 100%;
@@ -1796,68 +1818,6 @@ body.light-theme .invoice-item-input:focus {
 
   to {
     transform: translateY(0) scale(1);
-    opacity: 1;
-  }
-}
-
-/* Persistent Database Sync Error Banner */
-.sync-banner {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  background: var(--danger);
-  color: #fff;
-  padding: 0.75rem 1.25rem;
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  z-index: 300;
-  box-shadow: var(--shadow-lg);
-  font-size: 0.9rem;
-  animation: sync-banner-enter 0.3s ease-out;
-}
-
-.sync-banner-icon {
-  width: 20px;
-  height: 20px;
-  flex-shrink: 0;
-}
-
-#sync-banner-message {
-  flex: 1;
-  line-height: 1.35;
-}
-
-.sync-banner-close {
-  background: transparent;
-  border: none;
-  color: #fff;
-  cursor: pointer;
-  padding: 0.25rem;
-  display: flex;
-  align-items: center;
-  opacity: 0.85;
-  flex-shrink: 0;
-}
-
-.sync-banner-close:hover {
-  opacity: 1;
-}
-
-.sync-banner-close i {
-  width: 18px;
-  height: 18px;
-}
-
-@keyframes sync-banner-enter {
-  from {
-    transform: translateY(-100%);
-    opacity: 0;
-  }
-
-  to {
-    transform: translateY(0);
     opacity: 1;
   }
 }
@@ -3486,6 +3446,12 @@ body.dark-theme .monthly-expense-summary-bar {
   height: 22px;
 }
 
+.auth-hint {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-top: 1rem;
+}
+
 @keyframes shake {
   0%, 100% { transform: translateX(0); }
   20%, 60% { transform: translateX(-10px); }
@@ -3527,23 +3493,4 @@ body.light-theme .pin-key {
 body.light-theme .pin-key:hover {
   background: rgba(2, 132, 199, 0.05);
   border-color: var(--accent);
-}
-
-/* Autofill override to prevent white/yellow background in dark mode */
-input:-webkit-autofill,
-input:-webkit-autofill:hover, 
-input:-webkit-autofill:focus, 
-input:-webkit-autofill:active {
-  -webkit-box-shadow: 0 0 0 1000px transparent inset !important;
-  -webkit-text-fill-color: var(--text-primary) !important;
-  transition: background-color 5000s ease-in-out 0s;
-}
-
-/* Disable default utility styling on type="search" to match design */
-input[type="search"]::-webkit-search-decoration,
-input[type="search"]::-webkit-search-cancel-button,
-input[type="search"]::-webkit-search-results-button,
-input[type="search"]::-webkit-search-results-decoration {
-  display: none;
-  -webkit-appearance: none;
 }
