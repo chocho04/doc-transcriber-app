@@ -8,6 +8,7 @@ RewriteRule ^api/convert-to-pdf$ convert.php [L,QSA]
 RewriteRule ^api/load-state$ api.php?action=load [L,QSA]
 RewriteRule ^api/save-state$ api.php?action=save [L,QSA]
 RewriteRule ^api/upload-file$ upload.php [L,QSA]
+RewriteRule ^api/delete-file$ delete.php [L,QSA]
 
 # Deny direct web access to SQLite, JSON database files, and error logs
 <FilesMatch "(database\.sqlite|database\.json|sync_errors\.log)$">
