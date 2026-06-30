@@ -882,6 +882,45 @@ function capturePhoto() {}
 // ==========================================
 
 // Downscales image to fit in localStorage and reduce API payload size
+// ==========================================
+// Auto-analysis progress bar (shown under the capture/upload controls in place
+// of the old Analyze button). One per view: invoices / docs / staff.
+// ==========================================
+const ANALYZE_PROGRESS_VIEWS = {
+  invoices: 'analyze-progress-invoices',
+  docs: 'analyze-progress-docs',
+  staff: 'analyze-progress-staff'
+};
+function analyzeProgressEl(view) {
+  const id = ANALYZE_PROGRESS_VIEWS[view];
+  return id ? document.getElementById(id) : null;
+}
+function showAnalyzeProgress(view, text) {
+  const root = analyzeProgressEl(view);
+  if (!root) return;
+  root.classList.remove('hidden');
+  root.classList.add('indeterminate');
+  const fill = root.querySelector('.analyze-progress-bar-fill');
+  if (fill) fill.style.width = '';
+  const label = root.querySelector('.analyze-progress-text');
+  if (label) label.textContent = text || 'Анализиране...';
+}
+function setAnalyzeProgress(view, current, total) {
+  const root = analyzeProgressEl(view);
+  if (!root) return;
+  root.classList.remove('hidden');
+  root.classList.remove('indeterminate');
+  const pct = total > 0 ? Math.round((current / total) * 100) : 0;
+  const fill = root.querySelector('.analyze-progress-bar-fill');
+  if (fill) fill.style.width = pct + '%';
+  const label = root.querySelector('.analyze-progress-text');
+  if (label) label.textContent = `Анализиране ${current}/${total}...`;
+}
+function hideAnalyzeProgress(view) {
+  const root = analyzeProgressEl(view);
+  if (root) root.classList.add('hidden');
+}
+
 function processAndPreviewImage(base64Str) {
   const maxWidth = 1200;
   const maxHeight = 1200;
@@ -921,16 +960,10 @@ function processAndPreviewImage(base64Str) {
       state.capturedFileName = `Capture ${dateStr} ${timeStr}`;
     }
     
-    const isMobile = window.innerWidth < 768;
-    if (isMobile) {
-      // Auto-trigger transcribe on mobile
-      transcribeDocument();
-    } else {
-      // Show Preview on desktop
-      elements.imagePreview.src = state.capturedImageBase64;
-      elements.previewContainer.classList.remove('hidden');
-      elements.btnTranscribe.disabled = false;
-    }
+    // Show the preview, then auto-start analysis immediately.
+    elements.imagePreview.src = state.capturedImageBase64;
+    elements.previewContainer.classList.remove('hidden');
+    transcribeDocument();
   };
 }
 
@@ -1000,12 +1033,10 @@ async function transcribeDocument() {
   
   // Set Loading state
   const isBatch = state.isProcessingMultipleFiles;
-  const isMobile = window.innerWidth < 768;
-  if (!isBatch && isMobile) {
-    const loadingOverlay = document.getElementById('mobile-loading-overlay');
-    if (loadingOverlay) loadingOverlay.classList.remove('hidden');
+  if (!isBatch) {
+    showAnalyzeProgress('invoices', 'Анализиране на документа...');
   }
-  
+
   const originalBtnHtml = elements.btnTranscribe.innerHTML;
   if (!isBatch) {
     elements.btnTranscribe.disabled = true;
@@ -1084,11 +1115,7 @@ Rules:
     showToast(`Грешка: ${err.message}`, 'alert-circle');
   } finally {
     if (!isBatch) {
-      // Hide mobile loading overlay
-      const loadingOverlay = document.getElementById('mobile-loading-overlay');
-      if (loadingOverlay) loadingOverlay.classList.add('hidden');
-      
-      // Restore button state
+      hideAnalyzeProgress('invoices');
       elements.btnTranscribe.disabled = false;
       elements.btnTranscribe.innerHTML = originalBtnHtml;
       if (window.lucide) window.lucide.createIcons();
@@ -1114,12 +1141,10 @@ async function transcribeGeneralDocument() {
   
   // Set Loading state
   const isBatch = state.isProcessingMultipleFiles;
-  const isMobile = window.innerWidth < 768;
-  if (!isBatch && isMobile) {
-    const loadingOverlay = document.getElementById('mobile-loading-overlay');
-    if (loadingOverlay) loadingOverlay.classList.remove('hidden');
+  if (!isBatch) {
+    showAnalyzeProgress('docs', 'Анализиране...');
   }
-  
+
   const originalBtnHtml = elements.btnTranscribeDocs.innerHTML;
   if (!isBatch) {
     elements.btnTranscribeDocs.disabled = true;
@@ -1198,9 +1223,7 @@ Rules:
     showToast(`Грешка: ${err.message}`, 'alert-circle');
   } finally {
     if (!isBatch) {
-      const loadingOverlay = document.getElementById('mobile-loading-overlay');
-      if (loadingOverlay) loadingOverlay.classList.add('hidden');
-      
+      hideAnalyzeProgress('docs');
       elements.btnTranscribeDocs.disabled = false;
       elements.btnTranscribeDocs.innerHTML = originalBtnHtml;
       if (window.lucide) window.lucide.createIcons();
@@ -1222,12 +1245,10 @@ async function transcribeStaffDocument() {
   
   // Set Loading state
   const isBatch = state.isProcessingMultipleFiles;
-  const isMobile = window.innerWidth < 768;
-  if (!isBatch && isMobile) {
-    const loadingOverlay = document.getElementById('mobile-loading-overlay');
-    if (loadingOverlay) loadingOverlay.classList.remove('hidden');
+  if (!isBatch) {
+    showAnalyzeProgress('staff', 'Анализиране...');
   }
-  
+
   const originalBtnHtml = elements.btnTranscribeStaff.innerHTML;
   if (!isBatch) {
     elements.btnTranscribeStaff.disabled = true;
@@ -1305,9 +1326,7 @@ Rules:
     showToast(`Грешка: ${err.message}`, 'alert-circle');
   } finally {
     if (!isBatch) {
-      const loadingOverlay = document.getElementById('mobile-loading-overlay');
-      if (loadingOverlay) loadingOverlay.classList.add('hidden');
-      
+      hideAnalyzeProgress('staff');
       elements.btnTranscribeStaff.disabled = false;
       elements.btnTranscribeStaff.innerHTML = originalBtnHtml;
       if (window.lucide) window.lucide.createIcons();
@@ -1470,14 +1489,9 @@ function handleFileDocs(file) {
         
         state.capturedImageBase64Docs = canvas.toDataURL('image/jpeg', 0.8);
         
-        const isMobile = window.innerWidth < 768;
-        if (isMobile) {
-          transcribeGeneralDocument();
-        } else {
-          elements.imagePreviewDocs.src = state.capturedImageBase64Docs;
-          elements.previewContainerDocs.classList.remove('hidden');
-          elements.btnTranscribeDocs.disabled = false;
-        }
+        elements.imagePreviewDocs.src = state.capturedImageBase64Docs;
+        elements.previewContainerDocs.classList.remove('hidden');
+        transcribeGeneralDocument(); // auto-start analysis
       };
     } else {
       state.capturedImageBase64Docs = e.target.result;
@@ -1512,11 +1526,11 @@ function handleFileDocs(file) {
       
       elements.previewContainerDocs.appendChild(placeholder);
       elements.previewContainerDocs.classList.remove('hidden');
-      elements.btnTranscribeDocs.disabled = false;
-      
+
       if (window.lucide) {
         window.lucide.createIcons();
       }
+      transcribeGeneralDocument(); // auto-start analysis
     }
   };
   reader.readAsDataURL(file);
@@ -1599,14 +1613,9 @@ function handleFileStaff(file) {
         
         state.capturedImageBase64Staff = canvas.toDataURL('image/jpeg', 0.8);
         
-        const isMobile = window.innerWidth < 768;
-        if (isMobile) {
-          transcribeStaffDocument();
-        } else {
-          elements.imagePreviewStaff.src = state.capturedImageBase64Staff;
-          elements.previewContainerStaff.classList.remove('hidden');
-          elements.btnTranscribeStaff.disabled = false;
-        }
+        elements.imagePreviewStaff.src = state.capturedImageBase64Staff;
+        elements.previewContainerStaff.classList.remove('hidden');
+        transcribeStaffDocument(); // auto-start analysis
       };
     } else {
       state.capturedImageBase64Staff = e.target.result;
@@ -1641,11 +1650,11 @@ function handleFileStaff(file) {
       
       elements.previewContainerStaff.appendChild(placeholder);
       elements.previewContainerStaff.classList.remove('hidden');
-      elements.btnTranscribeStaff.disabled = false;
-      
+
       if (window.lucide) {
         window.lucide.createIcons();
       }
+      transcribeStaffDocument(); // auto-start analysis
     }
   };
   reader.readAsDataURL(file);
@@ -5858,6 +5867,8 @@ async function processMultipleFiles(files, viewType) {
     const file = files[i];
     const fileNum = i + 1;
 
+    setAnalyzeProgress(viewType, fileNum, total);
+
     // Update the button to show progress
     btnElement.disabled = true;
     btnElement.innerHTML = `<i data-lucide="loader-2" class="animate-spin"></i> <span>Файл ${fileNum}/${total}: ${escapeHTML(file.name.length > 25 ? file.name.substring(0, 22) + '...' : file.name)}</span>`;
@@ -5892,6 +5903,7 @@ async function processMultipleFiles(files, viewType) {
 
   // Restore batch flag and button
   state.isProcessingMultipleFiles = false;
+  hideAnalyzeProgress(viewType);
   btnElement.disabled = false;
   btnElement.innerHTML = originalBtnHtml;
   if (window.lucide) window.lucide.createIcons();
@@ -6001,11 +6013,11 @@ function handleFile(file) {
       
       elements.previewContainer.appendChild(placeholder);
       elements.previewContainer.classList.remove('hidden');
-      elements.btnTranscribe.disabled = false;
-      
+
       if (window.lucide) {
         window.lucide.createIcons();
       }
+      transcribeDocument(); // auto-start analysis
     }
   };
   reader.readAsDataURL(file);
