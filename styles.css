@@ -543,6 +543,7 @@ select.header-company-input option {
 /* Auto-analysis progress bar (replaces the Analyze button) */
 .analyze-progress {
   margin-top: 0.6rem;
+  grid-column: 1 / -1; /* span full width under the upload/dropzone in the desktop grid */
 }
 .analyze-progress-bar {
   height: 8px;
