@@ -319,6 +319,8 @@ let state = {
   capturedFileExtension: '',
   currentPage: 1,
   pageSize: 20,
+  sortColumn: null, // 'name' | 'date' | 'amount' | null (default order)
+  sortDir: 'asc',   // 'asc' | 'desc'
 
   // Page 2 (Documents) state
   activeSourceDocs: 'camera',
@@ -2162,6 +2164,12 @@ function clearAllDocuments() {
 }
 
 // Helper to normalize dates to YYYY-MM-DD for date inputs
+// Builds a counter badge value with the unit word wrapped so it can be hidden
+// on mobile (showing just the number) via the .count-unit CSS rule.
+function formatCountBadge(count, unit) {
+  return `${count} <span class="count-unit">${unit}</span>`;
+}
+
 function normalizeDate(dateStr) {
   if (!dateStr) return '';
   dateStr = dateStr.trim();
@@ -2286,17 +2294,47 @@ function renderDocumentList() {
     activeDocs = otherList;
   }
   
-  // Sort: most recent first, missing dates first
-  activeDocs.sort((a, b) => {
-    const dateA = normalizeDate(a.date);
-    const dateB = normalizeDate(b.date);
-    if (!dateA && !dateB) return 0;
-    if (!dateA) return -1; // missing goes first
-    if (!dateB) return 1;  // missing goes first
-    return dateB.localeCompare(dateA); // descending
-  });
+  // Sort: by the user-selected column/direction (set by clicking a column
+  // header), otherwise the default order (most recent first, missing dates first).
+  if (state.sortColumn) {
+    const dir = state.sortDir === 'desc' ? -1 : 1;
+    const nameOf = (d) => (state.activeTab === 'revenue-invoices' ? (d.recipient || '') : (d.supplier || '')).trim().toLowerCase();
+    const amountOf = (d) => (d.totalAmount != null && !isNaN(Number(d.totalAmount))) ? Number(d.totalAmount) : null;
+    activeDocs.sort((a, b) => {
+      if (state.sortColumn === 'name') {
+        return nameOf(a).localeCompare(nameOf(b), 'bg') * dir;
+      }
+      if (state.sortColumn === 'date') {
+        const da = normalizeDate(a.date);
+        const db = normalizeDate(b.date);
+        if (!da && !db) return 0;
+        if (!da) return 1;  // missing dates always last
+        if (!db) return -1;
+        return da.localeCompare(db) * dir;
+      }
+      if (state.sortColumn === 'amount') {
+        const aa = amountOf(a);
+        const ab = amountOf(b);
+        if (aa == null && ab == null) return 0;
+        if (aa == null) return 1;  // missing amounts always last
+        if (ab == null) return -1;
+        return (aa - ab) * dir;
+      }
+      return 0;
+    });
+  } else {
+    // Default: most recent first, missing dates first
+    activeDocs.sort((a, b) => {
+      const dateA = normalizeDate(a.date);
+      const dateB = normalizeDate(b.date);
+      if (!dateA && !dateB) return 0;
+      if (!dateA) return -1; // missing goes first
+      if (!dateB) return 1;  // missing goes first
+      return dateB.localeCompare(dateA); // descending
+    });
+  }
 
-  elements.docCount.textContent = `${activeDocs.length} Елем.`;
+  elements.docCount.innerHTML = formatCountBadge(activeDocs.length, 'Елем.');
   
   // If list is empty, show empty state
   if (activeDocs.length === 0) {
@@ -2378,14 +2416,33 @@ function renderDocumentList() {
   
   const header = document.createElement('div');
   header.className = 'invoice-header' + (isTaxesTab ? ' is-taxes' : '');
+  const sortArrow = (col) => state.sortColumn === col
+    ? `<span class="sort-arrow">${state.sortDir === 'asc' ? '▲' : '▼'}</span>`
+    : '';
   header.innerHTML = `
-    <div class="invoice-col">${colName}</div>
-    <div class="invoice-col">Дата</div>
-    <div class="invoice-col">${colAmount}</div>
+    <div class="invoice-col sortable-col" data-sort="name">${colName}${sortArrow('name')}</div>
+    <div class="invoice-col sortable-col" data-sort="date">Дата${sortArrow('date')}</div>
+    <div class="invoice-col sortable-col" data-sort="amount">${colAmount}${sortArrow('amount')}</div>
     ${isTaxesTab ? `<div class="invoice-col paid-header-col">Платено</div>` : ''}
     <div class="invoice-col" style="text-align: right;">Файлове</div>
   `;
   listContainer.appendChild(header);
+
+  // Clicking a column header sorts by it: first click ascending, click again
+  // on the same column toggles to descending.
+  header.querySelectorAll('.sortable-col').forEach(col => {
+    col.addEventListener('click', () => {
+      const column = col.dataset.sort;
+      if (state.sortColumn === column) {
+        state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        state.sortColumn = column;
+        state.sortDir = 'asc';
+      }
+      state.currentPage = 1;
+      renderDocumentList();
+    });
+  });
   
   const listWrapper = document.createElement('div');
   listWrapper.className = 'invoice-list';
@@ -2546,7 +2603,7 @@ function renderExpiringDocuments() {
   panel.classList.remove('hidden');
 
   if (countBadge) {
-    countBadge.textContent = `${expiringDocs.length} Елем.`;
+    countBadge.innerHTML = formatCountBadge(expiringDocs.length, 'Елем.');
   }
 
   listContainer.innerHTML = '';
@@ -2699,7 +2756,7 @@ function renderGeneralDocumentList() {
   });
 
   if (elements.docCountDocs) {
-    elements.docCountDocs.textContent = `${activeDocs.length} Елем.`;
+    elements.docCountDocs.innerHTML = formatCountBadge(activeDocs.length, 'Елем.');
   }
   
   if (activeDocs.length === 0) {
@@ -2915,7 +2972,7 @@ function renderStaffList() {
   });
   
   if (elements.docCountStaff) {
-    elements.docCountStaff.textContent = `${filteredStaff.length} Служители`;
+    elements.docCountStaff.innerHTML = formatCountBadge(filteredStaff.length, 'Служители');
   }
   
   if (state.staff.length === 0 && state.unattachedStaffDocs.length === 0) {
@@ -3296,7 +3353,7 @@ function renderStaffGeneralDocsList() {
   if (elements.badgeCountStaffOther) elements.badgeCountStaffOther.textContent = otherCount;
   
   if (elements.staffGeneralDocsCount) {
-    elements.staffGeneralDocsCount.textContent = `${filteredDocs.length} Елем.`;
+    elements.staffGeneralDocsCount.innerHTML = formatCountBadge(filteredDocs.length, 'Елем.');
   }
   
   if (filteredDocs.length === 0) {

@@ -1431,6 +1431,23 @@ body.light-theme .invoice-header {
   min-width: 0;
 }
 
+.invoice-header .sortable-col {
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s ease;
+}
+
+.invoice-header .sortable-col:hover {
+  color: var(--accent);
+}
+
+.sort-arrow {
+  margin-left: 0.3em;
+  font-size: 0.7em;
+  color: var(--accent);
+  vertical-align: middle;
+}
+
 .invoice-supplier {
   font-weight: 600;
   color: var(--text-primary);
@@ -2512,6 +2529,11 @@ body.light-theme input[type="date"] {
 
   .mobile-text {
     display: inline !important;
+  }
+
+  /* Counter badges: show only the number on mobile (hide the unit word) */
+  .badge .count-unit {
+    display: none;
   }
 
   /* Invoice summary: on mobile only show today's price */
