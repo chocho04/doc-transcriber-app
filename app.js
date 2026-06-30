@@ -4410,6 +4410,24 @@ function setupEventListeners() {
     });
   }
 
+  // Mobile "Качи" buttons — upload from the camera roll, multi-select supported.
+  const wireMobileUpload = (btnId, inputId, single, viewType) => {
+    const btn = document.getElementById(btnId);
+    const input = document.getElementById(inputId);
+    if (!btn || !input) return;
+    btn.addEventListener('click', () => input.click());
+    input.addEventListener('change', (e) => {
+      const files = Array.from(e.target.files);
+      if (files.length === 0) return;
+      if (files.length === 1) single(files[0]);
+      else processMultipleFiles(files, viewType);
+      e.target.value = '';
+    });
+  };
+  wireMobileUpload('btn-mobile-upload', 'mobile-upload-input', handleFile, 'invoices');
+  wireMobileUpload('btn-mobile-upload-docs', 'mobile-upload-input-docs', handleFileDocs, 'docs');
+  wireMobileUpload('btn-mobile-upload-staff', 'mobile-upload-input-staff', handleFileStaff, 'staff');
+
   // Camera Capture & Image Preview Actions
   if (elements.btnCapture) elements.btnCapture.addEventListener('click', capturePhoto);
   if (elements.btnRetryCamera) elements.btnRetryCamera.addEventListener('click', startCamera);

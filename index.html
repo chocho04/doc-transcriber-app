@@ -161,12 +161,19 @@
               <!-- Document Meta & Action -->
               <div class="meta-section">
                 <!-- Mobile Scan Trigger -->
-                <button id="btn-mobile-camera" class="btn btn-secondary btn-block btn-mobile-scan mobile-only-block"
-                  style="margin-bottom: 0.75rem;">
-                  <i data-lucide="camera"></i>
-                  <span>Снимай Документ</span>
-                </button>
+                <div class="mobile-capture-row">
+                  <button id="btn-mobile-camera" class="btn btn-secondary btn-mobile-scan">
+                    <i data-lucide="camera"></i>
+                    <span>Снимай</span>
+                  </button>
+                  <button id="btn-mobile-upload" class="btn btn-secondary btn-mobile-scan">
+                    <i data-lucide="images"></i>
+                    <span>Качи</span>
+                  </button>
+                </div>
                 <input type="file" id="mobile-camera-input" accept="image/*" capture="environment"
+                  style="display: none;">
+                <input type="file" id="mobile-upload-input" accept="image/*" multiple
                   style="display: none;">
 
                 <button id="btn-transcribe" class="btn btn-primary btn-block btn-analyse" disabled>
@@ -374,12 +381,19 @@
               <!-- Document Meta & Action -->
               <div class="meta-section">
                 <!-- Mobile Scan Trigger -->
-                <button id="btn-mobile-camera-docs"
-                  class="btn btn-secondary btn-block btn-mobile-scan mobile-only-block" style="margin-bottom: 0.75rem;">
-                  <i data-lucide="camera"></i>
-                  <span>Снимай Документ</span>
-                </button>
+                <div class="mobile-capture-row">
+                  <button id="btn-mobile-camera-docs" class="btn btn-secondary btn-mobile-scan">
+                    <i data-lucide="camera"></i>
+                    <span>Снимай</span>
+                  </button>
+                  <button id="btn-mobile-upload-docs" class="btn btn-secondary btn-mobile-scan">
+                    <i data-lucide="images"></i>
+                    <span>Качи</span>
+                  </button>
+                </div>
                 <input type="file" id="mobile-camera-input-docs" accept="image/*" capture="environment"
+                  style="display: none;">
+                <input type="file" id="mobile-upload-input-docs" accept="image/*" multiple
                   style="display: none;">
 
                 <button id="btn-transcribe-docs" class="btn btn-primary btn-block btn-analyse" disabled>
@@ -570,12 +584,19 @@
               <!-- Document Meta & Action -->
               <div class="meta-section">
                 <!-- Mobile Scan Trigger -->
-                <button id="btn-mobile-camera-staff"
-                  class="btn btn-secondary btn-block btn-mobile-scan mobile-only-block" style="margin-bottom: 0.75rem;">
-                  <i data-lucide="camera"></i>
-                  <span>Снимай Документ</span>
-                </button>
+                <div class="mobile-capture-row">
+                  <button id="btn-mobile-camera-staff" class="btn btn-secondary btn-mobile-scan">
+                    <i data-lucide="camera"></i>
+                    <span>Снимай</span>
+                  </button>
+                  <button id="btn-mobile-upload-staff" class="btn btn-secondary btn-mobile-scan">
+                    <i data-lucide="images"></i>
+                    <span>Качи</span>
+                  </button>
+                </div>
                 <input type="file" id="mobile-camera-input-staff" accept="image/*" capture="environment"
+                  style="display: none;">
+                <input type="file" id="mobile-upload-input-staff" accept="image/*" multiple
                   style="display: none;">
 
                 <button id="btn-transcribe-staff" class="btn btn-primary btn-block btn-analyse" disabled>
