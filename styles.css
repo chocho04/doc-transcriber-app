@@ -2450,16 +2450,18 @@ body.light-theme input[type="date"] {
     display: inline !important;
   }
 
-  /* On mobile, hide the text labels next to the prices in the
-     "Обща стойност с ДДС" summary row, leaving just the values. */
-  .invoice-summary-bar .summary-label .mobile-text,
-  .invoice-summary-bar .summary-today-label {
+  /* Invoice summary: on mobile only show today's price */
+  #invoice-summary #invoice-total-value {
+    display: none;
+  }
+
+  #invoice-summary .summary-label .mobile-text {
     display: none !important;
   }
 
-  /* Also hide the euro symbols next to the prices on mobile. */
-  .invoice-summary-bar .currency-symbol {
-    display: none !important;
+  #invoice-summary .summary-today {
+    padding-left: 0;
+    border-left: none;
   }
 
   /* Mobile Header Styles */
