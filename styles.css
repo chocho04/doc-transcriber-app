@@ -2450,6 +2450,13 @@ body.light-theme input[type="date"] {
     display: inline !important;
   }
 
+  /* On mobile, hide the text labels next to the prices in the
+     "Обща стойност с ДДС" summary row, leaving just the values. */
+  .invoice-summary-bar .summary-label .mobile-text,
+  .invoice-summary-bar .summary-today-label {
+    display: none !important;
+  }
+
   /* Mobile Header Styles */
   .app-header {
     flex-direction: row;
