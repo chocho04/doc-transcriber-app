@@ -1519,6 +1519,30 @@ body.light-theme .invoice-header {
   text-shadow: 0 0 10px rgb(0 210 255 / 30%);
 }
 
+.summary-values {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.summary-today {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding-left: 1.25rem;
+  border-left: 1px solid rgb(0 210 255 / 20%);
+}
+
+.summary-today-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.summary-today-value {
+  font-size: 1.05rem;
+}
+
 /* Responsive styles for invoice item */
 @media (width <=600px) {
   .invoice-header {

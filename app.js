@@ -432,7 +432,8 @@ const elements = {
   btnPrevMonth: document.getElementById('btn-prev-month'),
   btnNextMonth: document.getElementById('btn-next-month'),
   invoiceTotalValue: document.getElementById('invoice-total-value'),
-  
+  invoiceTodayValue: document.getElementById('invoice-today-value'),
+
   // View 2 (General Documents) Toggles & Panels
   toggleCameraDocs: document.getElementById('toggle-camera-docs'),
   toggleUploadDocs: document.getElementById('toggle-upload-docs'),
@@ -2339,6 +2340,7 @@ function renderDocumentList() {
   
   // Update and show Invoice total summation bar
   elements.invoiceTotalValue.textContent = `${totalSum.toFixed(2)} €`;
+  updateTodayTotal();
   elements.invoiceSummary.classList.remove('hidden');
   if (elements.monthlyExpenseSummary) {
     elements.monthlyExpenseSummary.classList.remove('hidden');
@@ -3590,6 +3592,27 @@ function openStaffDocDetailsModal(person, doc) {
   openModal(elements.modalStaffDocDetails);
 }
 
+// Sums totalAmount of all expense entries (Стока, Сметки, Бележки, Данъци, Други)
+// dated today, regardless of the active tab or search/date filters.
+function updateTodayTotal() {
+  if (!elements.invoiceTodayValue) return;
+
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const expenseTypes = ['invoice', 'bills', 'receipt', 'taxes', 'other'];
+
+  let todaySum = 0;
+  state.documents.forEach(doc => {
+    if (!expenseTypes.includes(doc.type)) return;
+    if (normalizeDate(doc.date) !== todayStr) return;
+    if (doc.totalAmount != null) {
+      todaySum += Number(doc.totalAmount);
+    }
+  });
+
+  elements.invoiceTodayValue.textContent = `${todaySum.toFixed(2)} €`;
+}
+
 function recalculateInvoiceTotal() {
   const filter = elements.searchInput.value.toLowerCase().trim();
   const startDate = elements.filterStartDate ? elements.filterStartDate.value : '';
@@ -3632,6 +3655,7 @@ function recalculateInvoiceTotal() {
   });
 
   elements.invoiceTotalValue.textContent = `${totalSum.toFixed(2)} €`;
+  updateTodayTotal();
 }
 
 // ==========================================
