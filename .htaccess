@@ -29,3 +29,11 @@ RewriteRule ^api/set-pin$ api.php?action=setpin [L,QSA]
 
 # Prevent Apache from limiting request body size (large base64 uploads)
 LimitRequestBody 0
+
+# Always revalidate HTML/JS/CSS so a Git pull / deploy takes effect immediately
+# (avoids the browser running a stale cached app.js after an update).
+<IfModule mod_headers.c>
+    <FilesMatch "\.(html|js|css)$">
+        Header set Cache-Control "no-cache, must-revalidate"
+    </FilesMatch>
+</IfModule>
