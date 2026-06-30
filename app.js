@@ -160,12 +160,12 @@ function confirmDelete(message) {
 // Server-side state sync (single shared dataset, token-gated)
 // ==========================================
 // Keys mirrored to the server so every device shares them. Per-device only
-// (never synced): app_access_pin, admin_delete_password, theme.
+// (never synced): app_access_pin (the login credential itself), theme.
 const SYNC_KEYS = [
   'saved_documents', 'saved_general_documents', 'saved_staff',
   'saved_staff_general_documents', 'saved_unattached_staff_docs',
   'my_company_name', 'cloudconvert_format',
-  'gemini_api_key', 'cloudconvert_api_key'
+  'gemini_api_key', 'cloudconvert_api_key', 'admin_delete_password'
 ];
 let syncSuspended = false; // true while applying server data, to avoid echoing it back
 
@@ -224,6 +224,15 @@ function applyServerData(data) {
     }
   });
   syncSuspended = false;
+  // Fill gaps: push any synced key this device has but the server lacks (e.g. a
+  // setting that became syncable only after it was already set on this device,
+  // like the admin delete password). Runs once until the server has it.
+  SYNC_KEYS.forEach((k) => {
+    const local = localStorage.getItem(k);
+    if ((data[k] === undefined || data[k] === null) && local != null) {
+      localStorage.setItem(k, local); // triggers the interceptor -> seeds server
+    }
+  });
   reloadStateFromLocalStorage();
 }
 
@@ -267,6 +276,7 @@ function reloadStateFromLocalStorage() {
   if (elements.cloudConvertApiKeyInput) elements.cloudConvertApiKeyInput.value = state.cloudConvertApiKey;
   if (elements.cloudConvertFormatSelect) elements.cloudConvertFormatSelect.value = state.cloudConvertFormat;
   if (elements.headerCompanyInput) elements.headerCompanyInput.value = state.myCompany;
+  if (elements.adminPasswordInput) elements.adminPasswordInput.value = getAdminPassword();
   updateApiKeyBadge();
   updateCloudConvertApiKeyBadge();
 
