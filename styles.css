@@ -1927,6 +1927,46 @@ body.light-theme .invoice-item-input:focus {
   }
 }
 
+/* Image Editor (crop + rotate) */
+.image-editor-content {
+  max-width: 760px;
+  width: 94vw;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.image-editor-body {
+  padding: 0;
+  background: #000;
+}
+
+.image-editor-canvas-wrap {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 240px;
+}
+
+#image-editor-img {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+}
+
+.image-editor-toolbar {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.image-editor-toolbar .btn {
+  padding: 0.5rem 0.85rem;
+}
+
 /* Utility Helpers */
 .hidden {
   display: none !important;

@@ -1017,8 +1017,198 @@ function rotateImage90Degrees() {
 }
 
 // ==========================================
+// Image Editor (free crop + 90° rotate before analysis)
+// Cropper.js is lazy-loaded on first use so it costs nothing on page load.
+// ==========================================
+let cropperInstance = null;
+let imageEditorOnApply = null;
+let cropperLibPromise = null;
+
+function ensureCropperLoaded() {
+  if (window.Cropper) return Promise.resolve();
+  if (cropperLibPromise) return cropperLibPromise;
+  cropperLibPromise = new Promise((resolve, reject) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css';
+    document.head.appendChild(css);
+
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js';
+    script.onload = () => resolve();
+    script.onerror = () => {
+      cropperLibPromise = null;
+      reject(new Error('Неуспешно зареждане на редактора на изображения.'));
+    };
+    document.head.appendChild(script);
+  });
+  return cropperLibPromise;
+}
+
+// Opens the crop/rotate editor for an image data URL. Calls onApply with the
+// edited data URL when confirmed; does nothing on cancel. If the editor library
+// fails to load, it falls back to using the original image unchanged.
+async function openImageEditor(dataUrl, onApply) {
+  try {
+    await ensureCropperLoaded();
+  } catch (err) {
+    showToast(err.message, 'alert-circle');
+    if (onApply) onApply(dataUrl);
+    return;
+  }
+
+  imageEditorOnApply = onApply;
+  const modal = document.getElementById('modal-image-editor');
+  const img = document.getElementById('image-editor-img');
+  if (!modal || !img) {
+    if (onApply) onApply(dataUrl);
+    return;
+  }
+
+  if (cropperInstance) {
+    cropperInstance.destroy();
+    cropperInstance = null;
+  }
+
+  img.src = dataUrl;
+  modal.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+
+  cropperInstance = new Cropper(img, {
+    viewMode: 1,
+    autoCropArea: 1,
+    background: false,
+    // No aspectRatio => free crop. Rotation handled via toolbar buttons.
+  });
+
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function closeImageEditor() {
+  const modal = document.getElementById('modal-image-editor');
+  if (cropperInstance) {
+    cropperInstance.destroy();
+    cropperInstance = null;
+  }
+  if (modal) modal.classList.add('hidden');
+  document.body.style.overflow = '';
+  imageEditorOnApply = null;
+}
+
+function applyImageEditor() {
+  if (!cropperInstance) return;
+  const canvas = cropperInstance.getCroppedCanvas({ maxWidth: 4000, maxHeight: 4000 });
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+  const cb = imageEditorOnApply;
+  closeImageEditor();
+  if (cb) cb(dataUrl);
+}
+
+// Converts a data URL back into a File so it can flow through the existing
+// handleFile* pipelines (which expect a File and handle naming/resize/analyze).
+function dataUrlToFile(dataUrl, filename) {
+  const [meta, b64] = dataUrl.split(',');
+  const mimeMatch = meta.match(/:(.*?);/);
+  const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+  const bstr = atob(b64);
+  let n = bstr.length;
+  const u8 = new Uint8Array(n);
+  while (n--) u8[n] = bstr.charCodeAt(n);
+  return new File([u8], filename || 'capture.jpg', { type: mime });
+}
+
+// Routes an image file through the editor before the given handler runs.
+// Non-image files (PDF/Office) bypass the editor entirely.
+function editImageFileBeforeAnalysis(file, onReady) {
+  if (!file || !file.type || !file.type.startsWith('image/')) {
+    onReady(file);
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    openImageEditor(e.target.result, (editedDataUrl) => {
+      onReady(dataUrlToFile(editedDataUrl, file.name));
+    });
+  };
+  reader.readAsDataURL(file);
+}
+
+// ==========================================
 // Gemini API Integration
 // ==========================================
+
+// Unified analysis prompt: classifies into a top-level "domain" (expense vs.
+// document) and extracts the union of fields for both, so the analyze button
+// can file a document into the correct category regardless of the active page.
+function buildUnifiedAnalysisPrompt() {
+  return `You are an expert document analyzer. Analyze the attached document (image, PDF, Excel, Word, RTF, or text file).
+
+FIRST, classify the document into one of two domains and return it as the "domain" field:
+- "expense": a financial/accounting document about money paid or received — a goods invoice (фактура), a utility or service bill (сметка: ток, вода, интернет, парно, телефон, А1, Виваком, Йеттел, EVN, Енерго-Про, Софийска вода), a cash/sales receipt (касов бон, касова бележка), a tax / social-security / state payment (данък, осигуровки, ДДС декларация), or any other purchase receipt/expense.
+- "document": a business, legal, or operational document — a permit/license/certificate (разрешително, лиценз, сертификат), a contract/agreement/annex (договор, анекс), a commercial/trade document such as an offer, delivery protocol, supplier trade document or order (търговски документ, оферта, протокол), a bank/account statement (извлечение), or any other general document.
+
+THEN return a single JSON object with these fields. Fill the ones relevant to the chosen domain; use null or [] for the rest.
+
+Common fields:
+- "domain": "expense" or "document".
+- "supplier": supplier / company name / grounds of payment ("доставчик" or "основание"). null if not found.
+- "date": the main document date in YYYY-MM-DD format. null if not found.
+
+If "domain" is "expense", also fill:
+- "recipient": the billing client or recipient company ("получател"), or null.
+- "totalAmount": the total sum WITH VAT in Euros (€) as a numeric float. Look for the price after "общо с ддс", "обща сума", "сума за плащане", "сума" (or English "total with vat", "total sum", "amount to pay", "sum"). null if not found.
+- "products": array of objects {"name": string, "quantity": number (default 1 if unspecified), "price": number or null}. [] if none.
+- "inferredType": one of "invoice", "bills", "receipt", "taxes", "other".
+   * "bills" for utility/service bills (ток, вода, интернет, парно, телефон, услуга, услуги, сметка, сметки, такса, такси, битова, А1, Виваком, Йеттел/Yettel, Електрохолд, EVN, Енерго-Про, Софийска вода).
+   * "invoice" if it contains "фактура" and is NOT a utility/service bill.
+   * "receipt" for cash/sales receipts (бон, касова бележка, receipt).
+   * "taxes" for taxes/social security/state payments (данък, осигуровки, данъци, ддс декларация, нп, tax, social security, insurance).
+   * otherwise "other".
+
+If "domain" is "document", also fill:
+- "name": a concise descriptive name in Bulgarian (e.g. "Разрешително за строеж", "Договор за наем", "Анекс към договор"). "Документ" if none can be inferred.
+- "type": one of "permit", "contract", "trade", "statement", "other".
+   * "permit" for permits, licenses, certificates, authorizations.
+   * "contract" for agreements, annexes, lease/sale/work contracts.
+   * "trade" for commercial offers, delivery notes/protocols, supplier trade documents, purchase orders.
+   * "statement" for bank/account/financial statements or extracts.
+   * otherwise "other".
+- "issueDate": the issue or signing date ("дата на издаване / сключване") in YYYY-MM-DD format, or null.
+- "expiryDate": the expiration or validity date ("валиден до / срок на действие") in YYYY-MM-DD format, or null.
+- "products": if "type" is "trade", array of objects {"product": string, "batch": string or null, "expiry": string or null in YYYY-MM-DD}; otherwise [].
+- "text": the full text transcript or key content of the document.`;
+}
+
+// Maps the AI "domain" classification to the target page id.
+function determineAnalysisDestination(parsedResult) {
+  const d = (parsedResult && parsedResult.domain ? parsedResult.domain : '').toString().toLowerCase();
+  if (d.includes('doc') || d === 'general') return 'documents';
+  return 'invoices';
+}
+
+// Routes a parsed analysis result to the correct domain's save function,
+// copying the captured file into the destination's capture variables when the
+// document was analyzed from a different page. Returns the destination page id.
+async function routeAnalyzedDocument(parsedResult, sourcePage) {
+  const dest = determineAnalysisDestination(parsedResult);
+
+  if (dest === 'documents') {
+    if (sourcePage !== 'documents') {
+      state.capturedImageBase64Docs = state.capturedImageBase64;
+      state.capturedFileExtensionDocs = state.capturedFileExtension;
+      state.capturedFileNameDocs = state.capturedFileName;
+    }
+    await saveGeneralDocTranscription(parsedResult);
+  } else {
+    if (sourcePage !== 'invoices') {
+      state.capturedImageBase64 = state.capturedImageBase64Docs;
+      state.capturedFileExtension = state.capturedFileExtensionDocs;
+      state.capturedFileName = state.capturedFileNameDocs;
+    }
+    await saveTranscription(parsedResult);
+  }
+  return dest;
+}
 
 async function transcribeDocument() {
   const apiKey = state.apiKey.trim();
@@ -1046,24 +1236,7 @@ async function transcribeDocument() {
   }
   
   try {
-    const promptText = `You are an expert document analyzer. Analyze the attached document image or file (could be an image, PDF, Excel sheet, Word doc, RTF, or text file).
-Return a JSON object with the exact fields below:
-1. "supplier": The billing supplier, company name, or grounds/reason of payment ("доставчик" or "основание за плащане"), if found. For tax/social security documents, return the type of tax or grounds (e.g., "ДДС за м.05" or "Здравни осигуровки"). Return null if not found.
-2. "recipient": The billing client or recipient company name ("получател"), if found. Return null if not found.
-3. "date": The document date ("дата") in YYYY-MM-DD format (e.g. "2026-06-23"), if found. Return null if not found.
-4. "products": An array of objects representing the products or services listed in the document. Each object must have:
-   - "name": (string) the name of the product or service.
-   - "quantity": (number) the quantity or amount of this product. If not specified, default to 1.
-   - "price": (number or null) the unit price or total price for this item. If not specified, return null.
-   Example: [{"name": "Кафе еспресо", "quantity": 1, "price": 2.50}, {"name": "Минерална вода", "quantity": 2, "price": 1.20}]. Return an empty array [] if none are found.
-4. "totalAmount": The total sum amount with VAT in Euros (€). Look specifically for the price in Euros (€) that appears after phrases like "общо с ддс", "обща сума", "сума за плащане", "сума" (or their English translations like "total with vat", "total sum", "amount to pay", "sum"). Extract the number as a numeric float value. Return null if not found.
-5. "inferredType": Classify the document as "invoice", "bills", "receipt", "taxes", or "other".
-
-Rules:
-- If the document is a bill, utility bill, or service invoice (contains references to electricity, water, internet, heating, phone, services, utilities, or Bulgarian equivalents like "ток", "вода", "интернет", "парно", "телефон", "услуга", "услуги", "битова сметка", "сметка", "сметки", "такса", "такси", "А1", "Виваком", "Йеттел", "Yettel", "Електрохолд", "EVN", "Енерго-Про", "Софийска вода"), "inferredType" MUST be "bills".
-- If the document contains the Bulgarian word "фактура" (or case variations like "ФАКТУРА") and is not a utility bill/service invoice, "inferredType" MUST be "invoice".
-- If the document is a cash/sales receipt (contains "бон", "касова бележка", "receipt"), "inferredType" MUST be "receipt".
-- If the document is related to taxes, social security, state insurance, municipal fees, declarations, or state payments (contains "данък", "осигуровки", "данъци", "ддс декларация", "нп", "tax", "social security", "insurance"), "inferredType" MUST be "taxes".`;
+    const promptText = buildUnifiedAnalysisPrompt();
 
     const requestBody = await prepareGeminiRequestBody(state.capturedImageBase64, promptText, state.capturedFileExtension);
     
@@ -1096,6 +1269,7 @@ Rules:
     } catch (jsonErr) {
       console.warn("Failed to parse Gemini response as JSON, falling back to empty details", jsonErr);
       parsedResult = {
+        domain: 'expense',
         supplier: null,
         date: null,
         products: [],
@@ -1103,12 +1277,13 @@ Rules:
         inferredType: responseText.toLowerCase().includes('фактура') ? 'invoice' : (responseText.toLowerCase().match(/(receipt|бон|бележка|касова)/) ? 'receipt' : 'other')
       };
     }
-    
-    await saveTranscription(parsedResult);
-    showToast('Документът е транскрибиран успешно!', 'check-circle');
+
+    const dest = await routeAnalyzedDocument(parsedResult, 'invoices');
+    showToast(dest === 'documents' ? 'Запазено в Документи.' : 'Документът е транскрибиран успешно!', 'check-circle');
     resetPreview();
     if (!isBatch) {
       collapseCapturePanel('invoices');
+      if (dest !== 'invoices') switchPage(dest);
     }
     
   } catch (err) {
@@ -1154,23 +1329,7 @@ async function transcribeGeneralDocument() {
   }
   
   try {
-    const promptText = `You are an expert document analyzer. Analyze the attached document image or file.
-Extract the document information and return a JSON object with the exact fields below:
-1. "name": A concise, descriptive name for the document in Bulgarian (e.g., "Разрешително за строеж", "Договор за наем", "Анекс към договор", "Сертификат за съответствие", etc.). If no name can be inferred, return "Документ".
-2. "type": Classify the document type. It MUST be one of: "permit" (for permits, licenses, certificates, authorizations), "contract" (for agreements, annexes, lease/sale contracts, work contracts), "trade" (for commercial offers, delivery notes/protocols, commercial/trade documents, purchase orders, trade agreements, supplier invoices/documents), "statement" (for bank statements, bank extracts, account statements, financial statements), or "other" (for any other type of document).
-3. "issueDate": The issue or signing date ("дата на издаване / сключване") in YYYY-MM-DD format (e.g. "2026-06-23"). Return null if not found.
-4. "expiryDate": The expiration or validity date ("валиден до / срок на действие") in YYYY-MM-DD format. Return null if not found.
-5. "supplier": The name of the supplier, seller, vendor, or partner company mentioned in the document. Return null if not found.
-6. "products": If type is "trade", extract the list of products/items listed in the document. Return a JSON array of objects, where each object has: "product" (string, product name in Bulgarian/original), "batch" (string or null, batch/lot number if mentioned), "expiry" (string or null, expiry or best-before date in YYYY-MM-DD format). If no products are found or type is not "trade", return an empty array [].
-7. "text": The full text transcript or key content of the document.
-
-Rules:
-- Default to Bulgarian language for the "name" and "supplier" fields if possible.
-- If it is a permit, certificate, license, or similar authorization, set type to "permit".
-- If it is a contract, agreement, annex, or deal, set type to "contract".
-- If it is a commercial offer, trade proposal, delivery protocol, supplier document/invoice, order, set type to "trade".
-- If it is a bank statement, bank extract, financial statement, account activity statement/extract, set type to "statement".
-- Otherwise, set type to "other".`;
+    const promptText = buildUnifiedAnalysisPrompt();
 
     const requestBody = await prepareGeminiRequestBody(state.capturedImageBase64Docs, promptText, state.capturedFileExtensionDocs);
     
@@ -1202,6 +1361,7 @@ Rules:
     } catch (jsonErr) {
       console.warn("Failed to parse Gemini response as JSON", jsonErr);
       parsedResult = {
+        domain: 'document',
         name: state.capturedFileNameDocs || 'Документ',
         type: 'other',
         issueDate: null,
@@ -1211,12 +1371,13 @@ Rules:
         text: responseText
       };
     }
-    
-    await saveGeneralDocTranscription(parsedResult);
-    showToast('Документът е анализиран успешно!', 'check-circle');
+
+    const dest = await routeAnalyzedDocument(parsedResult, 'documents');
+    showToast(dest === 'invoices' ? 'Запазено във Фактури.' : 'Документът е анализиран успешно!', 'check-circle');
     resetPreviewDocs();
     if (!isBatch) {
       collapseCapturePanel('documents');
+      if (dest !== 'documents') switchPage(dest);
     }
     
   } catch (err) {
@@ -2339,7 +2500,7 @@ function renderDocumentList() {
   listContainer.appendChild(listWrapper);
   
   // Update and show Invoice total summation bar
-  elements.invoiceTotalValue.innerHTML = `${totalSum.toFixed(2)} <span class="currency-symbol">€</span>`;
+  elements.invoiceTotalValue.textContent = `${totalSum.toFixed(2)} €`;
   updateTodayTotal();
   elements.invoiceSummary.classList.remove('hidden');
   if (elements.monthlyExpenseSummary) {
@@ -3610,7 +3771,7 @@ function updateTodayTotal() {
     }
   });
 
-  elements.invoiceTodayValue.innerHTML = `${todaySum.toFixed(2)} <span class="currency-symbol">€</span>`;
+  elements.invoiceTodayValue.textContent = `${todaySum.toFixed(2)} €`;
 }
 
 function recalculateInvoiceTotal() {
@@ -3654,7 +3815,7 @@ function recalculateInvoiceTotal() {
     }
   });
 
-  elements.invoiceTotalValue.innerHTML = `${totalSum.toFixed(2)} <span class="currency-symbol">€</span>`;
+  elements.invoiceTotalValue.textContent = `${totalSum.toFixed(2)} €`;
   updateTodayTotal();
 }
 
@@ -4406,8 +4567,9 @@ function setupEventListeners() {
     mobileCameraInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file) {
-        handleFile(file);
+        editImageFileBeforeAnalysis(file, handleFile);
       }
+      e.target.value = '';
     });
   }
 
@@ -4422,8 +4584,9 @@ function setupEventListeners() {
     mobileCameraInputDocs.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file) {
-        handleFileDocs(file);
+        editImageFileBeforeAnalysis(file, handleFileDocs);
       }
+      e.target.value = '';
     });
   }
 
@@ -4438,8 +4601,9 @@ function setupEventListeners() {
     mobileCameraInputStaff.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file) {
-        handleFileStaff(file);
+        editImageFileBeforeAnalysis(file, handleFileStaff);
       }
+      e.target.value = '';
     });
   }
 
@@ -4466,6 +4630,20 @@ function setupEventListeners() {
   if (elements.btnRetryCamera) elements.btnRetryCamera.addEventListener('click', startCamera);
   elements.btnRotatePreview.addEventListener('click', rotateImage90Degrees);
   elements.btnResetPreview.addEventListener('click', resetPreview);
+
+  // Image editor (crop + rotate) controls
+  const imgEditApply = document.getElementById('image-editor-apply');
+  const imgEditCancel = document.getElementById('image-editor-cancel');
+  const imgEditCancelBtn = document.getElementById('image-editor-cancel-btn');
+  const imgEditRotateL = document.getElementById('image-editor-rotate-left');
+  const imgEditRotateR = document.getElementById('image-editor-rotate-right');
+  const imgEditReset = document.getElementById('image-editor-reset');
+  if (imgEditApply) imgEditApply.addEventListener('click', applyImageEditor);
+  if (imgEditCancel) imgEditCancel.addEventListener('click', closeImageEditor);
+  if (imgEditCancelBtn) imgEditCancelBtn.addEventListener('click', closeImageEditor);
+  if (imgEditRotateL) imgEditRotateL.addEventListener('click', () => { if (cropperInstance) cropperInstance.rotate(-90); });
+  if (imgEditRotateR) imgEditRotateR.addEventListener('click', () => { if (cropperInstance) cropperInstance.rotate(90); });
+  if (imgEditReset) imgEditReset.addEventListener('click', () => { if (cropperInstance) cropperInstance.reset(); });
 
   // File Upload Drag & Drop
   const dropzone = elements.dropzone;
