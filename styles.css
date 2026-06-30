@@ -424,15 +424,17 @@ select.header-company-input option {
 }
 
 @media (width >=768px) {
+  /* Single full-width column on desktop too: analysis is now automatic, so the
+     right-hand action column is gone and the upload area spans the whole panel. */
   .capture-panel .panel-body {
-    display: grid;
-    grid-template-columns: 1.25fr 1fr;
-    gap: 1.5rem;
-    align-items: stretch;
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
   }
 
-  .capture-controls {
-    justify-content: space-between;
+  /* Keep the now full-width upload/camera area from getting too tall. */
+  .capture-panel .media-container {
+    max-height: 360px;
   }
 }
 
