@@ -2457,6 +2457,11 @@ body.light-theme input[type="date"] {
     display: none !important;
   }
 
+  /* Also hide the euro symbols next to the prices on mobile. */
+  .invoice-summary-bar .currency-symbol {
+    display: none !important;
+  }
+
   /* Mobile Header Styles */
   .app-header {
     flex-direction: row;

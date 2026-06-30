@@ -2339,7 +2339,7 @@ function renderDocumentList() {
   listContainer.appendChild(listWrapper);
   
   // Update and show Invoice total summation bar
-  elements.invoiceTotalValue.textContent = `${totalSum.toFixed(2)} €`;
+  elements.invoiceTotalValue.innerHTML = `${totalSum.toFixed(2)} <span class="currency-symbol">€</span>`;
   updateTodayTotal();
   elements.invoiceSummary.classList.remove('hidden');
   if (elements.monthlyExpenseSummary) {
@@ -3610,7 +3610,7 @@ function updateTodayTotal() {
     }
   });
 
-  elements.invoiceTodayValue.textContent = `${todaySum.toFixed(2)} €`;
+  elements.invoiceTodayValue.innerHTML = `${todaySum.toFixed(2)} <span class="currency-symbol">€</span>`;
 }
 
 function recalculateInvoiceTotal() {
@@ -3654,7 +3654,7 @@ function recalculateInvoiceTotal() {
     }
   });
 
-  elements.invoiceTotalValue.textContent = `${totalSum.toFixed(2)} €`;
+  elements.invoiceTotalValue.innerHTML = `${totalSum.toFixed(2)} <span class="currency-symbol">€</span>`;
   updateTodayTotal();
 }
 
