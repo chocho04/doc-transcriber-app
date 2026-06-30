@@ -61,9 +61,8 @@ try {
             throw new Exception('Failed to create uploads directory.');
         }
     }
-    if (!is_writable($upload_dir)) {
-        throw new Exception("Uploads directory is not writable. Set permissions to 755/775 in cPanel.");
-    }
+    // (No is_writable() precheck — false-negatives on some platforms;
+    // file_put_contents reports a clear error if the write truly fails.)
 
     $target = $upload_dir . '/' . $name;
     if (file_put_contents($target, $fileData) === false) {

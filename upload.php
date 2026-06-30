@@ -211,6 +211,27 @@ try {
 
     // Allowed safe extensions
     $allowed_extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'rtf', 'txt', 'csv', 'ppt', 'pptx', 'odt', 'ods', 'odp'];
+
+    // The app sends filenames WITHOUT an extension (e.g. "Capture 6/30/2026"), so
+    // when the name has no usable extension, derive it from the data URL's MIME
+    // type — matching the Python dev server. Without this, valid image/PDF uploads
+    // were rejected and the client silently fell back to inline base64.
+    if (!in_array($extension, $allowed_extensions, true)) {
+        $mimeToExt = [
+            'image/jpeg' => 'jpg', 'image/jpg' => 'jpg', 'image/pjpeg' => 'jpg',
+            'image/png' => 'png', 'image/gif' => 'gif', 'image/webp' => 'webp',
+            'application/pdf' => 'pdf', 'text/plain' => 'txt', 'text/csv' => 'csv',
+            'application/rtf' => 'rtf', 'text/rtf' => 'rtf',
+        ];
+        $mime = '';
+        if (!empty($base64Data) && preg_match('#^data:([^;,]+)#i', $base64Data, $mm)) {
+            $mime = strtolower($mm[1]);
+        }
+        if (isset($mimeToExt[$mime])) {
+            $extension = $mimeToExt[$mime];
+        }
+    }
+
     if (!in_array($extension, $allowed_extensions, true)) {
         throw new Exception('File extension not allowed for upload security.');
     }
@@ -222,9 +243,8 @@ try {
             throw new Exception('Failed to create uploads directory.');
         }
     }
-    if (!is_writable($upload_dir)) {
-        throw new Exception("Uploads directory is not writable. Set permissions to 755/775 in cPanel.");
-    }
+    // (No is_writable() precheck — it false-negatives on some platforms;
+    // file_put_contents below reports a clear error if the write truly fails.)
 
     // Generate a unique, safe filename to prevent overwrites or traversal
     $safe_basename = preg_replace('/[^a-zA-Z0-9_\-]/', '', pathinfo($filename, PATHINFO_FILENAME));
