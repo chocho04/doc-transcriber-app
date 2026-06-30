@@ -4635,13 +4635,11 @@ function setupEventListeners() {
   const imgEditApply = document.getElementById('image-editor-apply');
   const imgEditCancel = document.getElementById('image-editor-cancel');
   const imgEditCancelBtn = document.getElementById('image-editor-cancel-btn');
-  const imgEditRotateL = document.getElementById('image-editor-rotate-left');
   const imgEditRotateR = document.getElementById('image-editor-rotate-right');
   const imgEditReset = document.getElementById('image-editor-reset');
   if (imgEditApply) imgEditApply.addEventListener('click', applyImageEditor);
   if (imgEditCancel) imgEditCancel.addEventListener('click', closeImageEditor);
   if (imgEditCancelBtn) imgEditCancelBtn.addEventListener('click', closeImageEditor);
-  if (imgEditRotateL) imgEditRotateL.addEventListener('click', () => { if (cropperInstance) cropperInstance.rotate(-90); });
   if (imgEditRotateR) imgEditRotateR.addEventListener('click', () => { if (cropperInstance) cropperInstance.rotate(90); });
   if (imgEditReset) imgEditReset.addEventListener('click', () => { if (cropperInstance) cropperInstance.reset(); });
 
