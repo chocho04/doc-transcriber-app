@@ -1379,6 +1379,25 @@ select.header-company-input option {
   color: var(--accent);
 }
 
+/* Small corner badge: count of entries added in the last 12h (desktop only) */
+.tab-recent-badge {
+  position: absolute;
+  top: 1px;
+  right: 3px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: #04121c;
+  font-size: 0.6rem;
+  font-weight: 700;
+  line-height: 1;
+  border-radius: var(--radius-full);
+}
+
 /* Invoice List Layout */
 .invoice-list {
   display: flex;
@@ -2469,6 +2488,11 @@ body.light-theme input[type="date"] {
     justify-content: flex-start;
     padding: 0.75rem 1rem;
     font-size: 0.95rem;
+  }
+
+  /* Recent-count corner badge is desktop-only */
+  .tab-recent-badge {
+    display: none !important;
   }
 }
 

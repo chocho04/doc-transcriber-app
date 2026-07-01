@@ -427,6 +427,12 @@ const elements = {
   badgeCountReceipts: document.getElementById('badge-count-receipts'),
   badgeCountTaxes: document.getElementById('badge-count-taxes'),
   badgeCountOther: document.getElementById('badge-count-other'),
+  recentCountInvoices: document.getElementById('recent-count-invoices'),
+  recentCountBills: document.getElementById('recent-count-bills'),
+  recentCountRevenueInvoices: document.getElementById('recent-count-revenue-invoices'),
+  recentCountReceipts: document.getElementById('recent-count-receipts'),
+  recentCountTaxes: document.getElementById('recent-count-taxes'),
+  recentCountOther: document.getElementById('recent-count-other'),
   invoiceSummary: document.getElementById('invoice-summary'),
   monthlyExpenseSummary: document.getElementById('monthly-expense-summary'),
   monthlyExpenseLabel: document.getElementById('monthly-expense-label'),
@@ -2227,7 +2233,11 @@ function renderDocumentList() {
   const endDate = elements.filterEndDate ? elements.filterEndDate.value : '';
   const listContainer = elements.documentList;
   listContainer.innerHTML = '';
-  
+
+  // Entries created within this window are highlighted / counted as "new".
+  const RECENT_WINDOW_MS = 12 * 60 * 60 * 1000; // 12 hours
+  const isRecentDoc = (d) => d.timestamp && (Date.now() - d.timestamp) < RECENT_WINDOW_MS;
+
   // 1. Calculate filtered lists for all tabs
   const matchesFilter = (doc) => {
     const matchesText = (
@@ -2277,7 +2287,21 @@ function renderDocumentList() {
   if (elements.badgeCountReceipts) elements.badgeCountReceipts.textContent = receiptsList.length;
   if (elements.badgeCountTaxes) elements.badgeCountTaxes.textContent = taxesList.length;
   if (elements.badgeCountOther) elements.badgeCountOther.textContent = otherList.length;
-  
+
+  // Update per-tab "new in the last 12h" badges (desktop-only via CSS).
+  const setRecentBadge = (el, list) => {
+    if (!el) return;
+    const count = list.filter(isRecentDoc).length;
+    el.textContent = count;
+    el.classList.toggle('hidden', count === 0);
+  };
+  setRecentBadge(elements.recentCountInvoices, invoicesList);
+  setRecentBadge(elements.recentCountBills, billsList);
+  setRecentBadge(elements.recentCountRevenueInvoices, revenueInvoicesList);
+  setRecentBadge(elements.recentCountReceipts, receiptsList);
+  setRecentBadge(elements.recentCountTaxes, taxesList);
+  setRecentBadge(elements.recentCountOther, otherList);
+
   // 2. Select active list
   let activeDocs = [];
   if (state.activeTab === 'invoices') {
@@ -2460,10 +2484,9 @@ function renderDocumentList() {
     }
   });
   
-  const RECENT_WINDOW_MS = 12 * 60 * 60 * 1000; // 12 hours
   paginatedDocs.forEach(doc => {
     const item = document.createElement('div');
-    const isRecent = doc.timestamp && (Date.now() - doc.timestamp) < RECENT_WINDOW_MS;
+    const isRecent = isRecentDoc(doc);
     item.className = 'invoice-item' + (!doc.image ? ' no-file' : '') + (showPaidCol ? ' is-taxes' : '') + (isRecent ? ' recently-added' : '');
     item.dataset.id = doc.id;
     item.setAttribute('draggable', 'true');
