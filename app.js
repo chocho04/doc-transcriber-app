@@ -1067,8 +1067,9 @@ async function autoCropAndOrientDataUrl(dataUrl) {
     srcCanvas.width = W; srcCanvas.height = H;
     srcCanvas.getContext('2d').drawImage(img, 0, 0, W, H);
 
-    // --- Detect content bounds on a small edge map (documents are full of
-    // edges/text; desks and backgrounds are comparatively smooth) ---
+    // --- Detect the bright paper against a darker surface on a small copy.
+    // Edge density fails when the surface is textured (wood grain has edges
+    // everywhere); brightness separates white paper from the desk cleanly. ---
     const LONG = 480;
     const scale = Math.min(1, LONG / Math.max(W, H));
     const sw = Math.max(1, Math.round(W * scale));
@@ -1078,46 +1079,64 @@ async function autoCropAndOrientDataUrl(dataUrl) {
     sctx.drawImage(srcCanvas, 0, 0, sw, sh);
     const px = sctx.getImageData(0, 0, sw, sh).data;
 
-    const gray = new Float32Array(sw * sh);
+    // Grayscale + 256-bin brightness histogram.
+    const gray = new Uint8Array(sw * sh);
+    const hist = new Float64Array(256);
     for (let i = 0, p = 0; i < gray.length; i++, p += 4) {
-      gray[i] = 0.299 * px[p] + 0.587 * px[p + 1] + 0.114 * px[p + 2];
+      const g = (0.299 * px[p] + 0.587 * px[p + 1] + 0.114 * px[p + 2]) | 0;
+      gray[i] = g; hist[g]++;
     }
 
-    // Gradient magnitude per pixel, plus a running mean to set the edge cutoff.
-    const grad = new Float32Array(sw * sh);
-    let sum = 0, count = 0;
-    for (let y = 1; y < sh - 1; y++) {
-      for (let x = 1; x < sw - 1; x++) {
-        const i = y * sw + x;
-        const g = Math.abs(gray[i + 1] - gray[i - 1]) + Math.abs(gray[i + sw] - gray[i - sw]);
-        grad[i] = g; sum += g; count++;
-      }
+    // Otsu's method: the brightness that best splits dark surface vs bright paper.
+    const total = sw * sh;
+    let sumAll = 0;
+    for (let t = 0; t < 256; t++) sumAll += t * hist[t];
+    let wB = 0, sumB = 0, maxVar = -1, thresh = 127;
+    for (let t = 0; t < 256; t++) {
+      wB += hist[t];
+      if (wB === 0) continue;
+      const wF = total - wB;
+      if (wF === 0) break;
+      sumB += t * hist[t];
+      const mB = sumB / wB, mF = (sumAll - sumB) / wF;
+      const between = wB * wF * (mB - mF) * (mB - mF);
+      if (between > maxVar) { maxVar = between; thresh = t; }
     }
-    if (!count) return dataUrl;
-    const edgeT = Math.max(8, (sum / count) * 1.8); // above-average gradient = edge
 
-    // Count edge pixels per row/column; the document is the band where these
-    // counts stay well above the noise floor.
+    // If the two brightness classes aren't clearly separated, the image is
+    // essentially uniform (paper fills the frame, or a flat scene) — there's no
+    // distinct paper to isolate, so leave the photo unchanged.
+    let cntB = 0, accB = 0;
+    for (let t = 0; t <= thresh; t++) { cntB += hist[t]; accB += t * hist[t]; }
+    const cntF = total - cntB;
+    const contrast = (cntF ? (sumAll - accB) / cntF : 0) - (cntB ? accB / cntB : 0);
+    if (contrast < 45) {
+      console.info(`[autocrop] skip: no distinct paper (contrast=${contrast.toFixed(0)}) — paper likely fills the frame`);
+      return dataUrl;
+    }
+
+    // Paper mask = pixels brighter than the threshold. Count per row/column and
+    // keep the band where paper dominates (robust to stray bright specks/glare).
     const rowCount = new Float32Array(sh);
     const colCount = new Float32Array(sw);
-    for (let y = 1; y < sh - 1; y++) {
-      for (let x = 1; x < sw - 1; x++) {
-        if (grad[y * sw + x] > edgeT) { rowCount[y]++; colCount[x]++; }
+    for (let y = 0; y < sh; y++) {
+      for (let x = 0; x < sw; x++) {
+        if (gray[y * sw + x] > thresh) { rowCount[y]++; colCount[x]++; }
       }
     }
     let maxRow = 0, maxCol = 0;
     for (let y = 0; y < sh; y++) if (rowCount[y] > maxRow) maxRow = rowCount[y];
     for (let x = 0; x < sw; x++) if (colCount[x] > maxCol) maxCol = colCount[x];
-    if (maxRow === 0 || maxCol === 0) return dataUrl; // flat image, nothing to find
+    if (maxRow === 0 || maxCol === 0) return dataUrl;
 
-    const rowT = maxRow * 0.06, colT = maxCol * 0.06;
+    const rowT = maxRow * 0.4, colT = maxCol * 0.4;
     let top = -1, bottom = -1, left = -1, right = -1;
     for (let y = 0; y < sh; y++) if (rowCount[y] > rowT) { if (top < 0) top = y; bottom = y; }
     for (let x = 0; x < sw; x++) if (colCount[x] > colT) { if (left < 0) left = x; right = x; }
     if (top < 0 || left < 0) return dataUrl;
 
-    // Pad slightly so we don't shave the document's own border.
-    const padX = Math.round(sw * 0.015), padY = Math.round(sh * 0.015);
+    // Pad slightly so we don't shave the paper's own edge.
+    const padX = Math.round(sw * 0.01), padY = Math.round(sh * 0.01);
     top = Math.max(0, top - padY); bottom = Math.min(sh - 1, bottom + padY);
     left = Math.max(0, left - padX); right = Math.min(sw - 1, right + padX);
 
@@ -1130,16 +1149,16 @@ async function autoCropAndOrientDataUrl(dataUrl) {
 
     const areaFrac = (cw * ch) / (W * H);
     const alreadyPortrait = cw <= ch * 1.15;
-    if (areaFrac > 0.90 && alreadyPortrait) {
-      console.info(`[autocrop] skip: near-full-frame & upright (areaFrac=${areaFrac.toFixed(2)})`);
-      return dataUrl; // already tight & upright
+    if (areaFrac > 0.92 && alreadyPortrait) {
+      console.info(`[autocrop] skip: paper fills frame (areaFrac=${areaFrac.toFixed(2)})`);
+      return dataUrl;
     }
-    if (areaFrac < 0.15) {
+    if (areaFrac < 0.10) {
       console.info(`[autocrop] skip: detection too small (areaFrac=${areaFrac.toFixed(2)})`);
       return dataUrl; // don't risk a bad crop
     }
 
-    console.info(`[autocrop] crop ${W}x${H} -> ${cw}x${ch} (areaFrac=${areaFrac.toFixed(2)})`);
+    console.info(`[autocrop] crop ${W}x${H} -> ${cw}x${ch} (areaFrac=${areaFrac.toFixed(2)}, thresh=${thresh}, contrast=${contrast.toFixed(0)})`);
     let out = document.createElement('canvas');
     out.width = cw; out.height = ch;
     out.getContext('2d').drawImage(srcCanvas, cx, cy, cw, ch, 0, 0, cw, ch);
