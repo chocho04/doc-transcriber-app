@@ -1,0 +1,23 @@
+{
+  "name": "Doc Manager - Document Transcriber",
+  "short_name": "Doc Manager",
+  "description": "Premium Document Transcriber and Manager",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#121214",
+  "theme_color": "#6366f1",
+  "icons": [
+    {
+      "src": "favicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "apple-touch-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
