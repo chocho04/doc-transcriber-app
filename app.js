@@ -791,6 +791,50 @@ function switchPage(pageId) {
 function migrateOldDocuments() {
   let changed = false;
   
+  // Set all existing invoices to their upload date (derived from timestamp)
+  state.documents.forEach(doc => {
+    if (doc.timestamp) {
+      let uploadDateStr;
+      try {
+        const t = typeof doc.timestamp === 'number' ? doc.timestamp : Date.parse(doc.timestamp);
+        if (!isNaN(t)) {
+          uploadDateStr = new Date(t).toISOString().slice(0, 10);
+        }
+      } catch (_) {}
+      
+      if (!uploadDateStr) {
+        uploadDateStr = new Date().toISOString().slice(0, 10);
+      }
+      
+      if (doc.date !== uploadDateStr) {
+        doc.date = uploadDateStr;
+        changed = true;
+      }
+    }
+  });
+
+  // Set all existing trade documents to their upload date (derived from timestamp)
+  state.generalDocs.forEach(doc => {
+    if (doc.type === 'trade' && doc.timestamp) {
+      let uploadDateStr;
+      try {
+        const t = typeof doc.timestamp === 'number' ? doc.timestamp : Date.parse(doc.timestamp);
+        if (!isNaN(t)) {
+          uploadDateStr = new Date(t).toISOString().slice(0, 10);
+        }
+      } catch (_) {}
+      
+      if (!uploadDateStr) {
+        uploadDateStr = new Date().toISOString().slice(0, 10);
+      }
+      
+      if (doc.issueDate !== uploadDateStr) {
+        doc.issueDate = uploadDateStr;
+        changed = true;
+      }
+    }
+  });
+
   // Normalize existing date strings to YYYY-MM-DD
   state.documents.forEach(doc => {
     if (doc.date) {
@@ -2027,7 +2071,7 @@ async function saveTranscription(parsedResult) {
     name: name,
     supplier: parsedResult.supplier,
     recipient: parsedResult.recipient || null,
-    date: normalizeDate(parsedResult.date) || new Date().toISOString().slice(0, 10),
+    date: new Date().toISOString().slice(0, 10),
     products: parsedResult.products || [],
     totalAmount: parsedResult.totalAmount != null ? parseFloat(parsedResult.totalAmount) : null,
     type: finalType,
@@ -2058,12 +2102,17 @@ async function saveTranscription(parsedResult) {
 async function saveGeneralDocTranscription(parsedResult) {
   const name = parsedResult.name || state.capturedFileNameDocs || 'Untitled Document';
 
+  const type = parsedResult.type || 'other';
+  const issueDate = type === 'trade' 
+    ? new Date().toISOString().slice(0, 10) 
+    : (normalizeDate(parsedResult.issueDate) || new Date().toISOString().slice(0, 10));
+
   const newDoc = {
     id: 'gdoc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9),
     name: name,
-    type: parsedResult.type || 'other',
+    type: type,
     image: await uploadFileToServer(state.capturedImageBase64Docs, state.capturedFileNameDocs || 'document'),
-    issueDate: normalizeDate(parsedResult.issueDate) || new Date().toISOString().slice(0, 10),
+    issueDate: issueDate,
     expiryDate: normalizeDate(parsedResult.expiryDate),
     supplier: parsedResult.supplier || null,
     products: parsedResult.products || [],
