@@ -1153,9 +1153,14 @@ async function autoCropAndOrientDataUrl(dataUrl) {
   }
 }
 
-// Routes a captured image file through automatic orient + crop before the given
-// handler runs. Non-image files (PDF/Office) pass through untouched. If nothing
-// confident is detected, the original file flows through unchanged.
+// Files that have already been through auto orient + crop. The handleFile*
+// funnels check this so an image is processed exactly once no matter which
+// entry point (upload, drag & drop, mobile upload, camera) it came from.
+const autoProcessedFiles = new WeakSet();
+
+// Routes an image file through automatic orient + crop, then hands the result
+// (marked as processed) to onReady. Non-image files pass through untouched. If
+// nothing confident is detected, the original file flows through unchanged.
 function editImageFileBeforeAnalysis(file, onReady) {
   if (!file || !file.type || !file.type.startsWith('image/')) {
     onReady(file);
@@ -1165,12 +1170,13 @@ function editImageFileBeforeAnalysis(file, onReady) {
   reader.onload = (e) => {
     const original = e.target.result;
     autoCropAndOrientDataUrl(original).then((edited) => {
-      if (edited === original) {
-        onReady(file);
-      } else {
+      let out = file;
+      if (edited !== original) {
         showToast('Снимката е изрязана автоматично', 'crop');
-        onReady(dataUrlToFile(edited, file.name));
+        out = dataUrlToFile(edited, file.name);
       }
+      autoProcessedFiles.add(out);
+      onReady(out);
     });
   };
   reader.readAsDataURL(file);
@@ -1618,6 +1624,12 @@ function rotateImage90DegreesStaff() {
 }
 
 function handleFileDocs(file) {
+  // Auto orient + crop every image once, centrally, before handler processing.
+  // editImageFileBeforeAnalysis re-invokes this with a marked File.
+  if (file && file.type && file.type.startsWith('image/') && !autoProcessedFiles.has(file)) {
+    editImageFileBeforeAnalysis(file, handleFileDocs);
+    return;
+  }
   if (shouldConvertToPdf(file)) {
     elements.imagePreviewDocs.src = '';
     elements.imagePreviewDocs.classList.add('hidden');
@@ -1742,6 +1754,11 @@ function handleFileDocs(file) {
 }
 
 function handleFileStaff(file) {
+  // Auto orient + crop every image once, centrally, before handler processing.
+  if (file && file.type && file.type.startsWith('image/') && !autoProcessedFiles.has(file)) {
+    editImageFileBeforeAnalysis(file, handleFileStaff);
+    return;
+  }
   if (shouldConvertToPdf(file)) {
     elements.imagePreviewStaff.src = '';
     elements.imagePreviewStaff.classList.add('hidden');
@@ -4794,7 +4811,7 @@ function setupEventListeners() {
     mobileCameraInput.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file) {
-        editImageFileBeforeAnalysis(file, handleFile);
+        handleFile(file); // handleFile auto orients + crops images centrally
       }
       e.target.value = '';
     });
@@ -4811,7 +4828,7 @@ function setupEventListeners() {
     mobileCameraInputDocs.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file) {
-        editImageFileBeforeAnalysis(file, handleFileDocs);
+        handleFileDocs(file); // handleFileDocs auto orients + crops images centrally
       }
       e.target.value = '';
     });
@@ -4828,7 +4845,7 @@ function setupEventListeners() {
     mobileCameraInputStaff.addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (file) {
-        editImageFileBeforeAnalysis(file, handleFileStaff);
+        handleFileStaff(file); // handleFileStaff auto orients + crops images centrally
       }
       e.target.value = '';
     });
@@ -6300,7 +6317,11 @@ async function processMultipleFiles(files, viewType) {
         if (window.lucide) window.lucide.createIcons();
       }
 
-      const base64Data = await readFileAsDataURL(fileToProcess);
+      let base64Data = await readFileAsDataURL(fileToProcess);
+      // Auto orient + crop photos in batch uploads too.
+      if (fileToProcess.type && fileToProcess.type.startsWith('image/')) {
+        base64Data = await autoCropAndOrientDataUrl(base64Data);
+      }
 
       const lastDotIndex = fileToProcess.name.lastIndexOf('.');
       state[stateFileNameKey] = lastDotIndex !== -1 ? fileToProcess.name.substring(0, lastDotIndex) : fileToProcess.name;
@@ -6343,6 +6364,11 @@ async function processMultipleFiles(files, viewType) {
 
 // File Reader Helper
 function handleFile(file) {
+  // Auto orient + crop every image once, centrally, before handler processing.
+  if (file && file.type && file.type.startsWith('image/') && !autoProcessedFiles.has(file)) {
+    editImageFileBeforeAnalysis(file, handleFile);
+    return;
+  }
   if (shouldConvertToPdf(file)) {
     elements.imagePreview.src = '';
     elements.imagePreview.classList.add('hidden');
