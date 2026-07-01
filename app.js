@@ -1056,16 +1056,32 @@ function loadImageEl(src) {
 // falls back to the original unchanged, so it can never make a capture worse.
 // Never throws — resolves with an edited JPEG data URL or the original.
 async function autoCropAndOrientDataUrl(dataUrl) {
+  const passthrough = { dataUrl, cropped: false };
   try {
-    const img = await loadImageEl(dataUrl);
-    const W = img.naturalWidth, H = img.naturalHeight;
+    // Decode with EXIF orientation baked in. Canvas drawImage/toDataURL ignore
+    // and strip EXIF, so a rotated capture (e.g. an upside-down phone photo)
+    // would otherwise crop out sideways/upside-down. createImageBitmap with
+    // imageOrientation:'from-image' applies the orientation into the pixels.
+    let drawable, W, H;
+    try {
+      const blob = await (await fetch(dataUrl)).blob();
+      drawable = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+      W = drawable.width; H = drawable.height;
+    } catch (e) {
+      drawable = await loadImageEl(dataUrl);
+      W = drawable.naturalWidth; H = drawable.naturalHeight;
+    }
     console.info(`[autocrop] running on ${W}x${H} image`);
-    if (!W || !H) return dataUrl;
+    if (!W || !H) return passthrough;
 
-    // Full-res, EXIF-upright source we'll crop from.
+    // Full-res, upright source we'll crop from.
     const srcCanvas = document.createElement('canvas');
     srcCanvas.width = W; srcCanvas.height = H;
-    srcCanvas.getContext('2d').drawImage(img, 0, 0, W, H);
+    srcCanvas.getContext('2d').drawImage(drawable, 0, 0, W, H);
+
+    // When we don't crop, still hand back the orientation-corrected (EXIF-free)
+    // full image so rotation is fixed on every photo, not only cropped ones.
+    const upright = () => ({ dataUrl: srcCanvas.toDataURL('image/jpeg', 0.92), cropped: false });
 
     // --- Detect the bright paper against a darker surface on a small copy.
     // Edge density fails when the surface is textured (wood grain has edges
@@ -1112,7 +1128,7 @@ async function autoCropAndOrientDataUrl(dataUrl) {
     const contrast = (cntF ? (sumAll - accB) / cntF : 0) - (cntB ? accB / cntB : 0);
     if (contrast < 45) {
       console.info(`[autocrop] skip: no distinct paper (contrast=${contrast.toFixed(0)}) — paper likely fills the frame`);
-      return dataUrl;
+      return upright();
     }
 
     // Paper mask = pixels brighter than the threshold. Count per row/column and
@@ -1127,13 +1143,13 @@ async function autoCropAndOrientDataUrl(dataUrl) {
     let maxRow = 0, maxCol = 0;
     for (let y = 0; y < sh; y++) if (rowCount[y] > maxRow) maxRow = rowCount[y];
     for (let x = 0; x < sw; x++) if (colCount[x] > maxCol) maxCol = colCount[x];
-    if (maxRow === 0 || maxCol === 0) return dataUrl;
+    if (maxRow === 0 || maxCol === 0) return upright();
 
     const rowT = maxRow * 0.4, colT = maxCol * 0.4;
     let top = -1, bottom = -1, left = -1, right = -1;
     for (let y = 0; y < sh; y++) if (rowCount[y] > rowT) { if (top < 0) top = y; bottom = y; }
     for (let x = 0; x < sw; x++) if (colCount[x] > colT) { if (left < 0) left = x; right = x; }
-    if (top < 0 || left < 0) return dataUrl;
+    if (top < 0 || left < 0) return upright();
 
     // Pad slightly so we don't shave the paper's own edge.
     const padX = Math.round(sw * 0.01), padY = Math.round(sh * 0.01);
@@ -1145,17 +1161,17 @@ async function autoCropAndOrientDataUrl(dataUrl) {
     const cy = Math.round(top / scale);
     const cw = Math.round((right - left + 1) / scale);
     const ch = Math.round((bottom - top + 1) / scale);
-    if (cw < 16 || ch < 16) return dataUrl;
+    if (cw < 16 || ch < 16) return upright();
 
     const areaFrac = (cw * ch) / (W * H);
     const alreadyPortrait = cw <= ch * 1.15;
     if (areaFrac > 0.92 && alreadyPortrait) {
       console.info(`[autocrop] skip: paper fills frame (areaFrac=${areaFrac.toFixed(2)})`);
-      return dataUrl;
+      return upright();
     }
     if (areaFrac < 0.10) {
       console.info(`[autocrop] skip: detection too small (areaFrac=${areaFrac.toFixed(2)})`);
-      return dataUrl; // don't risk a bad crop
+      return upright(); // don't risk a bad crop
     }
 
     console.info(`[autocrop] crop ${W}x${H} -> ${cw}x${ch} (areaFrac=${areaFrac.toFixed(2)}, thresh=${thresh}, contrast=${contrast.toFixed(0)})`);
@@ -1173,10 +1189,10 @@ async function autoCropAndOrientDataUrl(dataUrl) {
       rctx.drawImage(out, 0, 0);
       out = rot;
     }
-    return out.toDataURL('image/jpeg', 0.9);
+    return { dataUrl: out.toDataURL('image/jpeg', 0.9), cropped: true };
   } catch (e) {
     console.warn('Auto-crop skipped:', e);
-    return dataUrl;
+    return passthrough;
   }
 }
 
@@ -1196,12 +1212,9 @@ function editImageFileBeforeAnalysis(file, onReady) {
   const reader = new FileReader();
   reader.onload = (e) => {
     const original = e.target.result;
-    autoCropAndOrientDataUrl(original).then((edited) => {
-      let out = file;
-      if (edited !== original) {
-        showToast('Снимката е изрязана автоматично', 'crop');
-        out = dataUrlToFile(edited, file.name);
-      }
+    autoCropAndOrientDataUrl(original).then(({ dataUrl, cropped }) => {
+      if (cropped) showToast('Снимката е изрязана автоматично', 'crop');
+      const out = dataUrl === original ? file : dataUrlToFile(dataUrl, file.name);
       autoProcessedFiles.add(out);
       onReady(out);
     });
@@ -6347,7 +6360,7 @@ async function processMultipleFiles(files, viewType) {
       let base64Data = await readFileAsDataURL(fileToProcess);
       // Auto orient + crop photos in batch uploads too.
       if (fileToProcess.type && fileToProcess.type.startsWith('image/')) {
-        base64Data = await autoCropAndOrientDataUrl(base64Data);
+        base64Data = (await autoCropAndOrientDataUrl(base64Data)).dataUrl;
       }
 
       const lastDotIndex = fileToProcess.name.lastIndexOf('.');
