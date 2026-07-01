@@ -1024,94 +1024,6 @@ function rotateImage90Degrees() {
   };
 }
 
-// ==========================================
-// Image Editor (free crop + 90° rotate before analysis)
-// Cropper.js is lazy-loaded on first use so it costs nothing on page load.
-// ==========================================
-let cropperInstance = null;
-let imageEditorOnApply = null;
-let cropperLibPromise = null;
-
-function ensureCropperLoaded() {
-  if (window.Cropper) return Promise.resolve();
-  if (cropperLibPromise) return cropperLibPromise;
-  cropperLibPromise = new Promise((resolve, reject) => {
-    const css = document.createElement('link');
-    css.rel = 'stylesheet';
-    css.href = 'https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css';
-    document.head.appendChild(css);
-
-    const script = document.createElement('script');
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js';
-    script.onload = () => resolve();
-    script.onerror = () => {
-      cropperLibPromise = null;
-      reject(new Error('Неуспешно зареждане на редактора на изображения.'));
-    };
-    document.head.appendChild(script);
-  });
-  return cropperLibPromise;
-}
-
-// Opens the crop/rotate editor for an image data URL. Calls onApply with the
-// edited data URL when confirmed; does nothing on cancel. If the editor library
-// fails to load, it falls back to using the original image unchanged.
-async function openImageEditor(dataUrl, onApply) {
-  try {
-    await ensureCropperLoaded();
-  } catch (err) {
-    showToast(err.message, 'alert-circle');
-    if (onApply) onApply(dataUrl);
-    return;
-  }
-
-  imageEditorOnApply = onApply;
-  const modal = document.getElementById('modal-image-editor');
-  const img = document.getElementById('image-editor-img');
-  if (!modal || !img) {
-    if (onApply) onApply(dataUrl);
-    return;
-  }
-
-  if (cropperInstance) {
-    cropperInstance.destroy();
-    cropperInstance = null;
-  }
-
-  img.src = dataUrl;
-  modal.classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
-
-  cropperInstance = new Cropper(img, {
-    viewMode: 1,
-    autoCropArea: 1,
-    background: false,
-    // No aspectRatio => free crop. Rotation handled via toolbar buttons.
-  });
-
-  if (window.lucide) window.lucide.createIcons();
-}
-
-function closeImageEditor() {
-  const modal = document.getElementById('modal-image-editor');
-  if (cropperInstance) {
-    cropperInstance.destroy();
-    cropperInstance = null;
-  }
-  if (modal) modal.classList.add('hidden');
-  document.body.style.overflow = '';
-  imageEditorOnApply = null;
-}
-
-function applyImageEditor() {
-  if (!cropperInstance) return;
-  const canvas = cropperInstance.getCroppedCanvas({ maxWidth: 4000, maxHeight: 4000 });
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
-  const cb = imageEditorOnApply;
-  closeImageEditor();
-  if (cb) cb(dataUrl);
-}
-
 // Converts a data URL back into a File so it can flow through the existing
 // handleFile* pipelines (which expect a File and handle naming/resize/analyze).
 function dataUrlToFile(dataUrl, filename) {
@@ -1125,8 +1037,125 @@ function dataUrlToFile(dataUrl, filename) {
   return new File([u8], filename || 'capture.jpg', { type: mime });
 }
 
-// Routes an image file through the editor before the given handler runs.
-// Non-image files (PDF/Office) bypass the editor entirely.
+// Loads a data URL into an <img>. Modern browsers apply EXIF orientation when
+// the image is drawn to a canvas, so downstream pixels are already upright.
+function loadImageEl(src) {
+  return new Promise((resolve, reject) => {
+    const im = new Image();
+    im.onload = () => resolve(im);
+    im.onerror = () => reject(new Error('image load'));
+    im.src = src;
+  });
+}
+
+// Lightweight, dependency-free auto orient + crop for captured document photos.
+// Detects the document's content bounds from a downscaled edge map, crops the
+// full-res image to those bounds, and normalizes clearly-landscape results to
+// portrait (this app's documents are overwhelmingly portrait). No perspective
+// correction. Any uncertainty (flat image, tiny/near-full-frame detection)
+// falls back to the original unchanged, so it can never make a capture worse.
+// Never throws — resolves with an edited JPEG data URL or the original.
+async function autoCropAndOrientDataUrl(dataUrl) {
+  try {
+    const img = await loadImageEl(dataUrl);
+    const W = img.naturalWidth, H = img.naturalHeight;
+    if (!W || !H) return dataUrl;
+
+    // Full-res, EXIF-upright source we'll crop from.
+    const srcCanvas = document.createElement('canvas');
+    srcCanvas.width = W; srcCanvas.height = H;
+    srcCanvas.getContext('2d').drawImage(img, 0, 0, W, H);
+
+    // --- Detect content bounds on a small edge map (documents are full of
+    // edges/text; desks and backgrounds are comparatively smooth) ---
+    const LONG = 480;
+    const scale = Math.min(1, LONG / Math.max(W, H));
+    const sw = Math.max(1, Math.round(W * scale));
+    const sh = Math.max(1, Math.round(H * scale));
+    const sctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+    sctx.canvas.width = sw; sctx.canvas.height = sh;
+    sctx.drawImage(srcCanvas, 0, 0, sw, sh);
+    const px = sctx.getImageData(0, 0, sw, sh).data;
+
+    const gray = new Float32Array(sw * sh);
+    for (let i = 0, p = 0; i < gray.length; i++, p += 4) {
+      gray[i] = 0.299 * px[p] + 0.587 * px[p + 1] + 0.114 * px[p + 2];
+    }
+
+    // Gradient magnitude per pixel, plus a running mean to set the edge cutoff.
+    const grad = new Float32Array(sw * sh);
+    let sum = 0, count = 0;
+    for (let y = 1; y < sh - 1; y++) {
+      for (let x = 1; x < sw - 1; x++) {
+        const i = y * sw + x;
+        const g = Math.abs(gray[i + 1] - gray[i - 1]) + Math.abs(gray[i + sw] - gray[i - sw]);
+        grad[i] = g; sum += g; count++;
+      }
+    }
+    if (!count) return dataUrl;
+    const edgeT = Math.max(8, (sum / count) * 1.8); // above-average gradient = edge
+
+    // Count edge pixels per row/column; the document is the band where these
+    // counts stay well above the noise floor.
+    const rowCount = new Float32Array(sh);
+    const colCount = new Float32Array(sw);
+    for (let y = 1; y < sh - 1; y++) {
+      for (let x = 1; x < sw - 1; x++) {
+        if (grad[y * sw + x] > edgeT) { rowCount[y]++; colCount[x]++; }
+      }
+    }
+    let maxRow = 0, maxCol = 0;
+    for (let y = 0; y < sh; y++) if (rowCount[y] > maxRow) maxRow = rowCount[y];
+    for (let x = 0; x < sw; x++) if (colCount[x] > maxCol) maxCol = colCount[x];
+    if (maxRow === 0 || maxCol === 0) return dataUrl; // flat image, nothing to find
+
+    const rowT = maxRow * 0.06, colT = maxCol * 0.06;
+    let top = -1, bottom = -1, left = -1, right = -1;
+    for (let y = 0; y < sh; y++) if (rowCount[y] > rowT) { if (top < 0) top = y; bottom = y; }
+    for (let x = 0; x < sw; x++) if (colCount[x] > colT) { if (left < 0) left = x; right = x; }
+    if (top < 0 || left < 0) return dataUrl;
+
+    // Pad slightly so we don't shave the document's own border.
+    const padX = Math.round(sw * 0.015), padY = Math.round(sh * 0.015);
+    top = Math.max(0, top - padY); bottom = Math.min(sh - 1, bottom + padY);
+    left = Math.max(0, left - padX); right = Math.min(sw - 1, right + padX);
+
+    // Map bounds back to full-res.
+    const cx = Math.round(left / scale);
+    const cy = Math.round(top / scale);
+    const cw = Math.round((right - left + 1) / scale);
+    const ch = Math.round((bottom - top + 1) / scale);
+    if (cw < 16 || ch < 16) return dataUrl;
+
+    const areaFrac = (cw * ch) / (W * H);
+    const alreadyPortrait = cw <= ch * 1.15;
+    if (areaFrac > 0.90 && alreadyPortrait) return dataUrl; // already tight & upright
+    if (areaFrac < 0.15) return dataUrl;                    // detection too small — don't risk it
+
+    let out = document.createElement('canvas');
+    out.width = cw; out.height = ch;
+    out.getContext('2d').drawImage(srcCanvas, cx, cy, cw, ch, 0, 0, cw, ch);
+
+    // Normalize clearly-landscape results to portrait.
+    if (cw > ch * 1.15) {
+      const rot = document.createElement('canvas');
+      rot.width = ch; rot.height = cw;
+      const rctx = rot.getContext('2d');
+      rctx.translate(ch, 0);
+      rctx.rotate(Math.PI / 2);
+      rctx.drawImage(out, 0, 0);
+      out = rot;
+    }
+    return out.toDataURL('image/jpeg', 0.9);
+  } catch (e) {
+    console.warn('Auto-crop skipped:', e);
+    return dataUrl;
+  }
+}
+
+// Routes a captured image file through automatic orient + crop before the given
+// handler runs. Non-image files (PDF/Office) pass through untouched. If nothing
+// confident is detected, the original file flows through unchanged.
 function editImageFileBeforeAnalysis(file, onReady) {
   if (!file || !file.type || !file.type.startsWith('image/')) {
     onReady(file);
@@ -1134,8 +1163,14 @@ function editImageFileBeforeAnalysis(file, onReady) {
   }
   const reader = new FileReader();
   reader.onload = (e) => {
-    openImageEditor(e.target.result, (editedDataUrl) => {
-      onReady(dataUrlToFile(editedDataUrl, file.name));
+    const original = e.target.result;
+    autoCropAndOrientDataUrl(original).then((edited) => {
+      if (edited === original) {
+        onReady(file);
+      } else {
+        showToast('Снимката е изрязана автоматично', 'crop');
+        onReady(dataUrlToFile(edited, file.name));
+      }
     });
   };
   reader.readAsDataURL(file);
@@ -4822,18 +4857,6 @@ function setupEventListeners() {
   if (elements.btnRetryCamera) elements.btnRetryCamera.addEventListener('click', startCamera);
   elements.btnRotatePreview.addEventListener('click', rotateImage90Degrees);
   elements.btnResetPreview.addEventListener('click', resetPreview);
-
-  // Image editor (crop + rotate) controls
-  const imgEditApply = document.getElementById('image-editor-apply');
-  const imgEditCancel = document.getElementById('image-editor-cancel');
-  const imgEditCancelBtn = document.getElementById('image-editor-cancel-btn');
-  const imgEditRotateR = document.getElementById('image-editor-rotate-right');
-  const imgEditReset = document.getElementById('image-editor-reset');
-  if (imgEditApply) imgEditApply.addEventListener('click', applyImageEditor);
-  if (imgEditCancel) imgEditCancel.addEventListener('click', closeImageEditor);
-  if (imgEditCancelBtn) imgEditCancelBtn.addEventListener('click', closeImageEditor);
-  if (imgEditRotateR) imgEditRotateR.addEventListener('click', () => { if (cropperInstance) cropperInstance.rotate(90); });
-  if (imgEditReset) imgEditReset.addEventListener('click', () => { if (cropperInstance) cropperInstance.reset(); });
 
   // File Upload Drag & Drop
   const dropzone = elements.dropzone;
