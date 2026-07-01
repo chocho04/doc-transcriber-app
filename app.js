@@ -2334,7 +2334,7 @@ function renderDocumentList() {
     });
   }
 
-  elements.docCount.innerHTML = formatCountBadge(activeDocs.length, 'Елем.');
+  if (elements.docCount) elements.docCount.innerHTML = formatCountBadge(activeDocs.length, 'Елем.');
   
   // If list is empty, show empty state
   if (activeDocs.length === 0) {
