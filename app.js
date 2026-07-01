@@ -1037,7 +1037,8 @@ function dataUrlToFile(dataUrl, filename) {
   return new File([u8], filename || 'capture.jpg', { type: mime });
 }
 
-// Loads a data URL into an <img>.
+// Loads a data URL into an <img>. Modern browsers apply EXIF orientation when
+// the image is drawn to a canvas, so downstream pixels are already upright.
 function loadImageEl(src) {
   return new Promise((resolve, reject) => {
     const im = new Image();
@@ -1045,56 +1046,6 @@ function loadImageEl(src) {
     im.onerror = () => reject(new Error('image load'));
     im.src = src;
   });
-}
-
-// Reads the EXIF orientation (1..8) from a JPEG ArrayBuffer. Returns 1 when
-// there's no tag or it isn't a JPEG. We parse it ourselves because browsers
-// disagree on whether canvas honors EXIF, and toDataURL strips it entirely.
-function readExifOrientation(buf) {
-  const view = new DataView(buf);
-  const len = view.byteLength;
-  if (len < 2 || view.getUint16(0, false) !== 0xFFD8) return 1; // not a JPEG
-  let offset = 2;
-  while (offset + 4 <= len) {
-    const marker = view.getUint16(offset, false);
-    if (marker === 0xFFE1) { // APP1 (Exif)
-      if (offset + 10 > len || view.getUint32(offset + 4, false) !== 0x45786966) return 1; // "Exif"
-      const tiff = offset + 10;
-      const little = view.getUint16(tiff, false) === 0x4949;
-      const ifd0 = tiff + view.getUint32(tiff + 4, little);
-      if (ifd0 + 2 > len) return 1;
-      const entries = view.getUint16(ifd0, little);
-      for (let i = 0; i < entries; i++) {
-        const entry = ifd0 + 2 + i * 12;
-        if (entry + 12 > len) break;
-        if (view.getUint16(entry, little) === 0x0112) { // Orientation tag
-          const o = view.getUint16(entry + 8, little);
-          return (o >= 1 && o <= 8) ? o : 1;
-        }
-      }
-      return 1;
-    }
-    if ((marker & 0xFF00) !== 0xFF00) break; // not a marker — stop
-    offset += 2 + view.getUint16(offset + 2, false); // skip this segment
-  }
-  return 1;
-}
-
-// Draws `drawable` (raw, rw×rh) into ctx with the EXIF orientation `o` applied.
-// The canvas must already be sized to the upright dimensions.
-function drawOriented(ctx, drawable, o, rw, rh) {
-  switch (o) {
-    case 2: ctx.setTransform(-1, 0, 0, 1, rw, 0); break;   // flip horizontal
-    case 3: ctx.setTransform(-1, 0, 0, -1, rw, rh); break; // 180°
-    case 4: ctx.setTransform(1, 0, 0, -1, 0, rh); break;   // flip vertical
-    case 5: ctx.setTransform(0, 1, 1, 0, 0, 0); break;     // transpose
-    case 6: ctx.setTransform(0, 1, -1, 0, rh, 0); break;   // 90° CW
-    case 7: ctx.setTransform(0, -1, -1, 0, rh, rw); break; // transverse
-    case 8: ctx.setTransform(0, -1, 1, 0, 0, rw); break;   // 90° CCW
-    default: ctx.setTransform(1, 0, 0, 1, 0, 0); break;    // 1: as-is
-  }
-  ctx.drawImage(drawable, 0, 0);
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
 // Lightweight, dependency-free auto orient + crop for captured document photos.
@@ -1107,34 +1058,26 @@ function drawOriented(ctx, drawable, o, rw, rh) {
 async function autoCropAndOrientDataUrl(dataUrl) {
   const passthrough = { dataUrl, cropped: false };
   try {
-    // Decode to RAW pixels (no browser auto-orientation) and apply the EXIF
-    // orientation ourselves. Canvas strips EXIF and browsers disagree on whether
-    // they auto-apply it, so doing it manually is the only reliable way to keep
-    // a rotated capture upright after cropping.
-    let orientation = 1, drawable, rw, rh;
+    // Decode with EXIF orientation baked in. Canvas drawImage/toDataURL ignore
+    // and strip EXIF, so a rotated capture (e.g. an upside-down phone photo)
+    // would otherwise crop out sideways/upside-down. createImageBitmap with
+    // imageOrientation:'from-image' applies the orientation into the pixels.
+    let drawable, W, H;
     try {
       const blob = await (await fetch(dataUrl)).blob();
-      orientation = readExifOrientation(await blob.arrayBuffer());
-      try {
-        drawable = await createImageBitmap(blob, { imageOrientation: 'none' });
-      } catch (inner) {
-        drawable = await loadImageEl(dataUrl);
-      }
+      drawable = await createImageBitmap(blob, { imageOrientation: 'from-image' });
+      W = drawable.width; H = drawable.height;
     } catch (e) {
       drawable = await loadImageEl(dataUrl);
+      W = drawable.naturalWidth; H = drawable.naturalHeight;
     }
-    rw = drawable.width || drawable.naturalWidth;
-    rh = drawable.height || drawable.naturalHeight;
-    if (!rw || !rh) return passthrough;
-
-    const swap = orientation >= 5 && orientation <= 8;
-    const W = swap ? rh : rw, H = swap ? rw : rh;
-    console.info(`[autocrop] running on ${rw}x${rh} raw (exif=${orientation}) -> upright ${W}x${H}`);
+    console.info(`[autocrop] running on ${W}x${H} image`);
+    if (!W || !H) return passthrough;
 
     // Full-res, upright source we'll crop from.
     const srcCanvas = document.createElement('canvas');
     srcCanvas.width = W; srcCanvas.height = H;
-    drawOriented(srcCanvas.getContext('2d'), drawable, orientation, rw, rh);
+    srcCanvas.getContext('2d').drawImage(drawable, 0, 0, W, H);
 
     // When we don't crop, still hand back the orientation-corrected (EXIF-free)
     // full image so rotation is fixed on every photo, not only cropped ones.
@@ -1253,6 +1196,69 @@ async function autoCropAndOrientDataUrl(dataUrl) {
   }
 }
 
+function rotateImageBase64(base64Str, degrees) {
+  return new Promise((resolve, reject) => {
+    if (!base64Str || !degrees || degrees % 360 === 0) {
+      resolve(base64Str);
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const rad = (degrees * Math.PI) / 180;
+      
+      if (degrees === 90 || degrees === 270) {
+        canvas.width = img.height;
+        canvas.height = img.width;
+      } else {
+        canvas.width = img.width;
+        canvas.height = img.height;
+      }
+      
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate(rad);
+      ctx.drawImage(img, -img.width / 2, -img.height / 2);
+      
+      resolve(canvas.toDataURL('image/jpeg', 0.9));
+    };
+    img.onerror = () => reject(new Error('Failed to load image for rotation'));
+    img.src = base64Str;
+  });
+}
+
+async function rotateImageIfNeeded(parsedResult, viewType) {
+  const rotation = parseInt(parsedResult?.suggestedRotation, 10);
+  if (!rotation || rotation % 360 === 0) return;
+  
+  console.info(`[auto-orient] rotating image by ${rotation}°`);
+  
+  let base64Key, previewEl;
+  if (viewType === 'invoices') {
+    base64Key = 'capturedImageBase64';
+    previewEl = elements.imagePreview;
+  } else if (viewType === 'docs') {
+    base64Key = 'capturedImageBase64Docs';
+    previewEl = elements.imagePreviewDocs;
+  } else if (viewType === 'staff') {
+    base64Key = 'capturedImageBase64Staff';
+    previewEl = elements.imagePreviewStaff;
+  }
+  
+  if (!base64Key || !state[base64Key] || !state[base64Key].startsWith('data:image/')) return;
+  
+  try {
+    const rotatedBase64 = await rotateImageBase64(state[base64Key], rotation);
+    state[base64Key] = rotatedBase64;
+    if (previewEl) {
+      previewEl.src = rotatedBase64;
+    }
+    showToast('Ориентацията на снимката е коригирана автоматично', 'rotate-cw');
+  } catch (err) {
+    console.warn(`[auto-orient] failed to rotate image:`, err);
+  }
+}
+
 // Files that have already been through auto orient + crop. The handleFile*
 // funnels check this so an image is processed exactly once no matter which
 // entry point (upload, drag & drop, mobile upload, camera) it came from.
@@ -1299,6 +1305,7 @@ Common fields:
 - "domain": "expense" or "document".
 - "supplier": supplier / company name / grounds of payment ("доставчик" or "основание"). null if not found.
 - "date": the main document date in YYYY-MM-DD format. null if not found.
+- "suggestedRotation": if the text in the image is rotated, the angle in degrees clockwise needed to make it upright. Choose ONLY from: 0, 90, 180, 270. Return 0 if the text is already upright and easy to read from top to bottom.
 
 If "domain" is "expense", also fill:
 - "recipient": the billing client or recipient company ("получател"), or null.
@@ -1424,6 +1431,9 @@ async function transcribeDocument() {
       };
     }
 
+    // Rotate if suggested by Gemini
+    await rotateImageIfNeeded(parsedResult, 'invoices');
+
     const dest = await routeAnalyzedDocument(parsedResult, 'invoices');
     showToast(dest === 'documents' ? 'Запазено в Документи.' : 'Документът е транскрибиран успешно!', 'check-circle');
     resetPreview();
@@ -1518,6 +1528,9 @@ async function transcribeGeneralDocument() {
       };
     }
 
+    // Rotate if suggested by Gemini
+    await rotateImageIfNeeded(parsedResult, 'docs');
+
     const dest = await routeAnalyzedDocument(parsedResult, 'documents');
     showToast(dest === 'invoices' ? 'Запазено във Фактури.' : 'Документът е анализиран успешно!', 'check-circle');
     resetPreviewDocs();
@@ -1578,6 +1591,7 @@ Extract the relevant details and return a JSON object with the exact fields belo
 5. "issueDate": The signing, issue, or period date of the document in YYYY-MM-DD format. Look for payment dates or schedule month dates. Return null if not found.
 6. "hiringDate": The employee's hiring/start date in YYYY-MM-DD format, if docCategory is "personal". Return null if not found.
 7. "fullText": The complete text transcript or key content of the document.
+8. "suggestedRotation": if the text in the image is rotated, the angle in degrees clockwise needed to make it upright. Choose ONLY from: 0, 90, 180, 270. Return 0 if the text is already upright.
 
 Rules:
 - Be very accurate in extracting the names. Use standard Bulgarian spelling.`;
@@ -1622,6 +1636,9 @@ Rules:
       };
     }
     
+    // Rotate if suggested by Gemini
+    await rotateImageIfNeeded(parsedResult, 'staff');
+
     await saveStaffDocTranscription(parsedResult);
     showToast('Документът е анализиран успешно!', 'check-circle');
     resetPreviewStaff();
