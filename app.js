@@ -1179,16 +1179,6 @@ async function autoCropAndOrientDataUrl(dataUrl) {
     out.width = cw; out.height = ch;
     out.getContext('2d').drawImage(srcCanvas, cx, cy, cw, ch, 0, 0, cw, ch);
 
-    // Normalize clearly-landscape results to portrait.
-    if (cw > ch * 1.15) {
-      const rot = document.createElement('canvas');
-      rot.width = ch; rot.height = cw;
-      const rctx = rot.getContext('2d');
-      rctx.translate(ch, 0);
-      rctx.rotate(Math.PI / 2);
-      rctx.drawImage(out, 0, 0);
-      out = rot;
-    }
     return { dataUrl: out.toDataURL('image/jpeg', 0.9), cropped: true };
   } catch (e) {
     console.warn('Auto-crop skipped:', e);
