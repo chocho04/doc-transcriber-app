@@ -320,7 +320,9 @@ let state = {
   capturedFileName: null,
   capturedFileExtension: '',
   currentPage: 1,
-  pageSize: 20,
+  get pageSize() {
+    return window.innerWidth < 768 ? 10 : 20;
+  },
   sortColumn: null, // 'name' | 'date' | 'amount' | null (default order)
   sortDir: 'asc',   // 'asc' | 'desc'
 
@@ -331,7 +333,10 @@ let state = {
   capturedFileNameDocs: null,
   capturedFileExtensionDocs: '',
   currentPageDocs: 1,
-  pageSizeDocs: 20,
+  get pageSizeDocs() {
+    return window.innerWidth < 768 ? 10 : 20;
+  },
+  lastIsMobile: window.innerWidth < 768,
 
   // Page 3 (Staff) state
   activeSourceStaff: 'camera',
@@ -7074,6 +7079,18 @@ function initPINAuthentication() {
     });
   }
 }
+
+// Window resize handler to dynamically adjust page sizes and re-render if breakpoint crossed
+window.addEventListener('resize', () => {
+  const isMobile = window.innerWidth < 768;
+  if (state.lastIsMobile !== isMobile) {
+    state.lastIsMobile = isMobile;
+    state.currentPage = 1;
+    state.currentPageDocs = 1;
+    renderDocumentList();
+    renderGeneralDocumentList();
+  }
+});
 
 // Boot application
 document.addEventListener('DOMContentLoaded', init);
