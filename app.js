@@ -264,6 +264,7 @@ function reloadStateFromLocalStorage() {
     state.staff = JSON.parse(localStorage.getItem('saved_staff')) || [];
     state.staffGeneralDocs = JSON.parse(localStorage.getItem('saved_staff_general_documents')) || [];
     state.unattachedStaffDocs = JSON.parse(localStorage.getItem('saved_unattached_staff_docs')) || [];
+    state.supplierMapping = JSON.parse(localStorage.getItem('supplier_mapping')) || {};
   } catch (e) {
     console.warn('Failed to parse restored state arrays', e);
   }
@@ -307,6 +308,7 @@ let state = {
   generalDocs: JSON.parse(localStorage.getItem('saved_general_documents')) || [],
   staff: JSON.parse(localStorage.getItem('saved_staff')) || [],
   unattachedStaffDocs: JSON.parse(localStorage.getItem('saved_unattached_staff_docs')) || [],
+  supplierMapping: JSON.parse(localStorage.getItem('supplier_mapping')) || {},
   
   activePage: 'invoices', // 'invoices', 'documents', or 'staff'
   activeExpenseMonth: new Date().toISOString().slice(0, 7), // "YYYY-MM"
@@ -2037,6 +2039,15 @@ function handleFileStaff(file) {
 async function saveTranscription(parsedResult) {
   const name = state.capturedFileName || 'Untitled Document';
   
+  // Apply supplier mapping
+  if (parsedResult.supplier) {
+    const extSupplier = parsedResult.supplier.trim();
+    const mapped = state.supplierMapping[extSupplier.toLowerCase()];
+    if (mapped) {
+      parsedResult.supplier = mapped;
+    }
+  }
+  
   // Classify based on uploader name, supplier details, or inferred type
   const isInvoiceKeyword = name.toLowerCase().includes('фактура') || 
                             (parsedResult.supplier && parsedResult.supplier.toLowerCase().includes('фактура'));
@@ -2101,6 +2112,15 @@ async function saveTranscription(parsedResult) {
 
 async function saveGeneralDocTranscription(parsedResult) {
   const name = parsedResult.name || state.capturedFileNameDocs || 'Untitled Document';
+  
+  // Apply supplier mapping
+  if (parsedResult.supplier) {
+    const extSupplier = parsedResult.supplier.trim();
+    const mapped = state.supplierMapping[extSupplier.toLowerCase()];
+    if (mapped) {
+      parsedResult.supplier = mapped;
+    }
+  }
 
   const type = parsedResult.type || 'other';
   const issueDate = type === 'trade' 
@@ -3996,6 +4016,7 @@ function renderStaffPersonDocs(person, docsList) {
 
 function openGeneralDocDetailsModal(doc) {
   state.currentlyViewingDocIdDocs = doc.id;
+  state.originalSupplierNameDocs = doc.supplier || '';
   
   const labelElem = document.getElementById('label-view-doc-name');
   if (doc.type === 'trade') {
@@ -4255,6 +4276,7 @@ function closeModal(modalElement) {
 
 function openDocDetailsModal(doc) {
   state.currentlyViewingDocId = doc.id;
+  state.originalSupplierName = doc.supplier || '';
   elements.viewTitle.textContent = doc.name;
   
   // Clean up any existing placeholder in details modal
@@ -5149,6 +5171,15 @@ function setupEventListeners() {
       const doc = state.documents.find(d => d.id === state.currentlyViewingDocId);
       if (doc) {
         doc.supplier = e.target.value;
+        
+        // Track and record supplier mapping
+        const orig = (state.originalSupplierName || '').trim().toLowerCase();
+        const newVal = e.target.value.trim();
+        if (orig && newVal && orig !== newVal.toLowerCase()) {
+          state.supplierMapping[orig] = newVal;
+          localStorage.setItem('supplier_mapping', JSON.stringify(state.supplierMapping));
+        }
+        
         localStorage.setItem('saved_documents', JSON.stringify(state.documents));
         renderDocumentList();
       }
@@ -5656,9 +5687,17 @@ function setupEventListeners() {
     if (state.currentlyViewingDocIdDocs) {
       const doc = state.generalDocs.find(d => d.id === state.currentlyViewingDocIdDocs);
       if (doc) {
-        if (doc.type === 'trade') {
+        if (doc.type === 'trade' || doc.type === 'statement') {
           doc.supplier = e.target.value;
           doc.name = e.target.value; // Sync with doc.name for search
+          
+          // Track and record supplier mapping
+          const orig = (state.originalSupplierNameDocs || '').trim().toLowerCase();
+          const newVal = e.target.value.trim();
+          if (orig && newVal && orig !== newVal.toLowerCase()) {
+            state.supplierMapping[orig] = newVal;
+            localStorage.setItem('supplier_mapping', JSON.stringify(state.supplierMapping));
+          }
         } else {
           doc.name = e.target.value;
         }
