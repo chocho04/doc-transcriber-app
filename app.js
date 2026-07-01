@@ -2460,9 +2460,11 @@ function renderDocumentList() {
     }
   });
   
+  const RECENT_WINDOW_MS = 12 * 60 * 60 * 1000; // 12 hours
   paginatedDocs.forEach(doc => {
     const item = document.createElement('div');
-    item.className = 'invoice-item' + (!doc.image ? ' no-file' : '') + (showPaidCol ? ' is-taxes' : '');
+    const isRecent = doc.timestamp && (Date.now() - doc.timestamp) < RECENT_WINDOW_MS;
+    item.className = 'invoice-item' + (!doc.image ? ' no-file' : '') + (showPaidCol ? ' is-taxes' : '') + (isRecent ? ' recently-added' : '');
     item.dataset.id = doc.id;
     item.setAttribute('draggable', 'true');
     

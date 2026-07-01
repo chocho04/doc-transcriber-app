@@ -1404,6 +1404,17 @@ select.header-company-input option {
   transform: translateX(2px);
 }
 
+/* Entries uploaded within the last 12 hours */
+.invoice-item.recently-added {
+  border-color: rgb(0 210 255 / 45%);
+  background: rgb(0 210 255 / 8%);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.invoice-item.recently-added:hover {
+  background: rgb(0 210 255 / 14%);
+}
+
 .invoice-header {
   background: rgb(19 26 46 / 70%);
   font-weight: 600;
