@@ -1059,6 +1059,7 @@ async function autoCropAndOrientDataUrl(dataUrl) {
   try {
     const img = await loadImageEl(dataUrl);
     const W = img.naturalWidth, H = img.naturalHeight;
+    console.info(`[autocrop] running on ${W}x${H} image`);
     if (!W || !H) return dataUrl;
 
     // Full-res, EXIF-upright source we'll crop from.
@@ -1129,9 +1130,16 @@ async function autoCropAndOrientDataUrl(dataUrl) {
 
     const areaFrac = (cw * ch) / (W * H);
     const alreadyPortrait = cw <= ch * 1.15;
-    if (areaFrac > 0.90 && alreadyPortrait) return dataUrl; // already tight & upright
-    if (areaFrac < 0.15) return dataUrl;                    // detection too small — don't risk it
+    if (areaFrac > 0.90 && alreadyPortrait) {
+      console.info(`[autocrop] skip: near-full-frame & upright (areaFrac=${areaFrac.toFixed(2)})`);
+      return dataUrl; // already tight & upright
+    }
+    if (areaFrac < 0.15) {
+      console.info(`[autocrop] skip: detection too small (areaFrac=${areaFrac.toFixed(2)})`);
+      return dataUrl; // don't risk a bad crop
+    }
 
+    console.info(`[autocrop] crop ${W}x${H} -> ${cw}x${ch} (areaFrac=${areaFrac.toFixed(2)})`);
     let out = document.createElement('canvas');
     out.width = cw; out.height = ch;
     out.getContext('2d').drawImage(srcCanvas, cx, cy, cw, ch, 0, 0, cw, ch);
