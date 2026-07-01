@@ -2502,6 +2502,11 @@ body.light-theme input[type="date"] {
     display: none !important;
   }
 
+  /* Unpaid entries panel is desktop-only */
+  #panel-unpaid {
+    display: none !important;
+  }
+
   /* Hide date range filter on mobile */
   .date-range-filter {
     display: none !important;

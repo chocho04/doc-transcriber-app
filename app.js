@@ -2568,7 +2568,113 @@ function renderDocumentList() {
     elements.monthlyExpenseSummary.classList.remove('hidden');
     updateMonthlyExpenseTotal();
   }
-  
+
+  renderUnpaidEntries();
+
+  if (window.lucide) window.lucide.createIcons();
+}
+
+// Renders the "Неплатени" panel shown above the invoices list. Gathers every
+// expense entry that supports a paid toggle (Разходи + Данъци) and is not yet
+// marked paid, regardless of the active tab. Desktop-only (hidden via CSS on
+// mobile); the panel stays hidden when there is nothing outstanding.
+function renderUnpaidEntries() {
+  const panel = document.getElementById('panel-unpaid');
+  const listContainer = document.getElementById('unpaid-list');
+  const countBadge = document.getElementById('unpaid-count');
+  if (!panel || !listContainer) return;
+
+  const unpaidDocs = state.documents.filter(doc =>
+    (doc.type === 'bills' || doc.type === 'taxes') && !doc.paid
+  );
+
+  // Oldest first so the most overdue entries surface at the top; missing dates last.
+  unpaidDocs.sort((a, b) => {
+    const da = normalizeDate(a.date);
+    const db = normalizeDate(b.date);
+    if (!da && !db) return 0;
+    if (!da) return 1;
+    if (!db) return -1;
+    return da.localeCompare(db);
+  });
+
+  if (unpaidDocs.length === 0) {
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.classList.remove('hidden');
+
+  if (countBadge) {
+    countBadge.innerHTML = formatCountBadge(unpaidDocs.length, 'Елем.');
+  }
+
+  listContainer.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.className = 'invoice-header is-taxes';
+  header.style.borderTop = 'none';
+  header.innerHTML = `
+    <div class="invoice-col">Основание / Доставчик</div>
+    <div class="invoice-col">Тип</div>
+    <div class="invoice-col">Дата</div>
+    <div class="invoice-col">Сума</div>
+    <div class="invoice-col paid-header-col">Платено</div>
+  `;
+  listContainer.appendChild(header);
+
+  const listWrapper = document.createElement('div');
+  listWrapper.className = 'invoice-list';
+
+  unpaidDocs.forEach(doc => {
+    const item = document.createElement('div');
+    item.className = 'invoice-item is-taxes';
+    item.dataset.id = doc.id;
+
+    const nameVal = doc.supplier || '';
+    const dateVal = normalizeDate(doc.date);
+    const amountVal = doc.totalAmount != null ? Number(doc.totalAmount).toFixed(2) : '';
+    const typeLabel = doc.type === 'taxes' ? 'Данъци' : 'Разходи';
+    const namePlaceholder = doc.type === 'taxes' ? 'Основание' : 'Доставчик';
+
+    item.innerHTML = `
+      <div class="invoice-col" style="display: flex; align-items: center; gap: 0.5rem;">
+        <i data-lucide="alert-circle" style="color: #ef4444; flex-shrink: 0; width: 16px; height: 16px;"></i>
+        <span class="invoice-item-text main-party-text" title="${escapeHTML(nameVal)}">${escapeHTML(nameVal) || `<span class="text-muted">${namePlaceholder}</span>`}</span>
+      </div>
+      <div class="invoice-col">
+        <span class="badge" style="font-size: 0.75rem; text-transform: uppercase; background: var(--bg-surface-hover); padding: 0.25rem 0.5rem; border-radius: 4px;">${typeLabel}</span>
+      </div>
+      <div class="invoice-col">
+        <span style="color: #ef4444; font-weight: 500;">${formatDateForDisplay(dateVal) || '—'}</span>
+      </div>
+      <div class="invoice-col amount-col">
+        <span class="invoice-item-text amount-text">${amountVal ? amountVal + ' €' : '<span class="text-muted">0.00 €</span>'}</span>
+      </div>
+      <div class="invoice-col paid-col">
+        <button class="btn-paid-toggle" data-id="${doc.id}" title="Маркирай като платено">
+          <i data-lucide="circle"></i>
+        </button>
+      </div>
+    `;
+
+    item.querySelector('.btn-paid-toggle').addEventListener('click', (e) => {
+      e.stopPropagation();
+      doc.paid = true;
+      localStorage.setItem('saved_documents', JSON.stringify(state.documents));
+      renderDocumentList();
+    });
+
+    item.addEventListener('click', (e) => {
+      if (!e.target.closest('.btn-paid-toggle')) {
+        openDocDetailsModal(doc);
+      }
+    });
+
+    listWrapper.appendChild(item);
+  });
+
+  listContainer.appendChild(listWrapper);
+
   if (window.lucide) window.lucide.createIcons();
 }
 
