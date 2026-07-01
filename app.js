@@ -2404,6 +2404,10 @@ function renderDocumentList() {
   // 3. Render active list header
   const isRevenueTab = state.activeTab === 'revenue-invoices';
   const isTaxesTab = state.activeTab === 'taxes';
+  const isBillsTab = state.activeTab === 'bills';
+  // Both the taxes and bills (Разходи) tabs show a "Платено" toggle column and
+  // use the wider (is-taxes) grid layout to make room for it.
+  const showPaidCol = isTaxesTab || isBillsTab;
   let colName = 'Доставчик';
   let colAmount = 'Сума с ДДС';
   
@@ -2415,7 +2419,7 @@ function renderDocumentList() {
   }
   
   const header = document.createElement('div');
-  header.className = 'invoice-header' + (isTaxesTab ? ' is-taxes' : '');
+  header.className = 'invoice-header' + (showPaidCol ? ' is-taxes' : '');
   const sortArrow = (col) => state.sortColumn === col
     ? `<span class="sort-arrow">${state.sortDir === 'asc' ? '▲' : '▼'}</span>`
     : '';
@@ -2423,7 +2427,7 @@ function renderDocumentList() {
     <div class="invoice-col sortable-col" data-sort="name">${colName}${sortArrow('name')}</div>
     <div class="invoice-col sortable-col" data-sort="date">Дата${sortArrow('date')}</div>
     <div class="invoice-col sortable-col" data-sort="amount">${colAmount}${sortArrow('amount')}</div>
-    ${isTaxesTab ? `<div class="invoice-col paid-header-col">Платено</div>` : ''}
+    ${showPaidCol ? `<div class="invoice-col paid-header-col">Платено</div>` : ''}
     <div class="invoice-col" style="text-align: right;">Файлове</div>
   `;
   listContainer.appendChild(header);
@@ -2458,7 +2462,7 @@ function renderDocumentList() {
   
   paginatedDocs.forEach(doc => {
     const item = document.createElement('div');
-    item.className = 'invoice-item' + (!doc.image ? ' no-file' : '') + (isTaxesTab ? ' is-taxes' : '');
+    item.className = 'invoice-item' + (!doc.image ? ' no-file' : '') + (showPaidCol ? ' is-taxes' : '');
     item.dataset.id = doc.id;
     item.setAttribute('draggable', 'true');
     
@@ -2485,7 +2489,7 @@ function renderDocumentList() {
       <div class="invoice-col amount-col">
         <span class="invoice-item-text amount-text">${amountValue ? amountValue + ' €' : '<span class="text-muted">0.00 €</span>'}</span>
       </div>
-      ${isTaxesTab ? `
+      ${showPaidCol ? `
       <div class="invoice-col paid-col">
         <button class="btn-paid-toggle ${doc.paid ? 'paid' : ''}" data-id="${doc.id}" title="${doc.paid ? 'Маркирай като неплатено' : 'Маркирай като платено'}">
           <i data-lucide="${doc.paid ? 'check-circle' : 'circle'}"></i>
@@ -2521,7 +2525,7 @@ function renderDocumentList() {
     });
     
     // Wire up clicks
-    if (isTaxesTab) {
+    if (showPaidCol) {
       const toggleBtn = item.querySelector('.btn-paid-toggle');
       if (toggleBtn) {
         toggleBtn.addEventListener('click', (e) => {
@@ -3810,7 +3814,7 @@ function openStaffDocDetailsModal(person, doc) {
   openModal(elements.modalStaffDocDetails);
 }
 
-// Sums totalAmount of all expense entries (Стока, Сметки, Бележки, Данъци, Други)
+// Sums totalAmount of all expense entries (Стока, Разходи, Бележки, Данъци, Други)
 // dated today, regardless of the active tab or search/date filters.
 function updateTodayTotal() {
   if (!elements.invoiceTodayValue) return;
